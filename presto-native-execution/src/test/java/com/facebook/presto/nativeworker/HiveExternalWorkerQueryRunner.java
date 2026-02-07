@@ -15,7 +15,6 @@ package com.facebook.presto.nativeworker;
 
 import com.facebook.airlift.log.Logger;
 import com.facebook.airlift.log.Logging;
-import com.facebook.presto.testing.QueryRunner;
 import com.facebook.presto.tests.DistributedQueryRunner;
 
 public class HiveExternalWorkerQueryRunner
@@ -29,14 +28,15 @@ public class HiveExternalWorkerQueryRunner
         Logging.initialize();
 
         // Create tables before launching distributed runner.
-        QueryRunner javaQueryRunner = PrestoNativeQueryRunnerUtils.javaHiveQueryRunnerBuilder().build();
-        NativeQueryRunnerUtils.createAllTables(javaQueryRunner);
-        javaQueryRunner.close();
+        // QueryRunner javaQueryRunner = PrestoNativeQueryRunnerUtils.javaHiveQueryRunnerBuilder().build();
+        // NativeQueryRunnerUtils.createAllTables(javaQueryRunner);
+        // javaQueryRunner.close();
 
         // Launch distributed runner.
         DistributedQueryRunner queryRunner = (DistributedQueryRunner) PrestoNativeQueryRunnerUtils.nativeHiveQueryRunnerBuilder().build();
         Thread.sleep(10);
         Logger log = Logger.get(DistributedQueryRunner.class);
+        log.info("======== PPPPPPP ========");
         log.info("======== SERVER STARTED ========");
         log.info("\n====\n%s\n====", queryRunner.getCoordinator().getBaseUrl());
     }

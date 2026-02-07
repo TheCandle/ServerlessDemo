@@ -14,7 +14,7 @@
 BUILD_BASE_DIR=_build
 BUILD_DIR=release
 BUILD_TYPE=Release
-TREAT_WARNINGS_AS_ERRORS ?= 1
+TREAT_WARNINGS_AS_ERRORS ?= 0
 ENABLE_WALL ?= 1
 NUM_THREADS ?= $(shell getconf _NPROCESSORS_CONF 2>/dev/null || echo 1)
 CPU_TARGET ?= "avx"

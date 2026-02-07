@@ -11,4 +11,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+sed -i "s|http://127.0.0.1:<replace_port>|http://127.0.0.1:$SERVER_PORT|" /opt/presto-server/etc/config.properties
+sed -i "s|http-server.http.port=7777|http-server.http.port=$WORKER_PORT|" /opt/presto-server/etc/config.properties
+
 GLOG_logtostderr=1 presto_server --etc-dir=/opt/presto-server/etc

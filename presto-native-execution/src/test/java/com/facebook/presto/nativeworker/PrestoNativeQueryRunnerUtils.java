@@ -153,7 +153,7 @@ public class PrestoNativeQueryRunnerUtils
                 this.extraProperties.putAll(getNativeWorkerSystemProperties());
                 this.extraCoordinatorProperties.putAll(ImmutableMap.<String, String>builder()
                         .put("native-execution-enabled", "true")
-                        .put("http-server.http.port", "8081")
+                        .put("http-server.http.port", "8082")
                         .build());
                 // The property "hive.allow-drop-table" needs to be set to true because security is always "legacy" in NativeQueryRunner.
                 this.hiveProperties.putAll(ImmutableMap.<String, String>builder()

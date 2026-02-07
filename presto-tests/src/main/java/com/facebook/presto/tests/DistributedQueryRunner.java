@@ -204,6 +204,8 @@ public class DistributedQueryRunner
         try {
             long start = nanoTime();
             discoveryServer = new TestingDiscoveryServer(environment);
+            System.out.println("12312321");
+            System.out.println(environment);
             this.coordinatorCount = coordinatorCount;
             this.resourceManagerCount = resourceManagerCount;
             closer.register(() -> closeUnchecked(discoveryServer));
