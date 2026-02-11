@@ -10,6 +10,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+
 ARG DEPENDENCY_IMAGE=presto/prestissimo-dependency:centos9
 ARG BASE_IMAGE=quay.io/centos/centos:stream9
 FROM ${DEPENDENCY_IMAGE} as prestissimo-image
@@ -38,12 +39,16 @@ RUN !(LD_LIBRARY_PATH=${LD_LIBRARY_PATH}:/usr/local/lib:/usr/local/lib64 ldd /pr
 #          prestissimo-runtime
 #//////////////////////////////////////////////
 
+FROM --platform=${TARGETPLATFORM:-linux/amd64} ghcr.io/openfaas/of-watchdog:0.10.11 AS watchdog
+
 FROM ${BASE_IMAGE}
+
+COPY --from=watchdog /fwatchdog /usr/bin/fwatchdog
+RUN chmod +x /usr/bin/fwatchdog
 
 ENV BUILD_BASE_DIR=_build
 ENV BUILD_DIR=""
-ENV SERVER_PORT=8080
-ENV WORKER_PORT=7777
+ENV fprocess="echo 'worker running'"
 
 COPY --chmod=0775 --from=prestissimo-image /prestissimo/${BUILD_BASE_DIR}/${BUILD_DIR}/presto_cpp/main/presto_server /usr/bin/
 COPY --chmod=0775 --from=prestissimo-image /runtime-libraries/* /usr/lib64/prestissimo-libs/

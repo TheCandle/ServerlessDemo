@@ -114,8 +114,9 @@ public class DistributedQueryRunner
     private static final String ENVIRONMENT = "testing";
     private static final String DEFAULT_USER = "user";
     private static final SqlParserOptions DEFAULT_SQL_PARSER_OPTIONS = new SqlParserOptions();
+    private static final TestingDiscoveryServer discoveryServer1 = null;
 
-    private final TestingDiscoveryServer discoveryServer;
+    private final CustomTestingDiscoveryServer discoveryServer;
     private final List<TestingPrestoServer> coordinators;
     private final int coordinatorCount;
     private final List<TestingPrestoServer> servers;
@@ -203,13 +204,19 @@ public class DistributedQueryRunner
 
         try {
             long start = nanoTime();
-            discoveryServer = new TestingDiscoveryServer(environment);
-            System.out.println("12312321");
-            System.out.println(environment);
+            // discoveryServer = new TestingDiscoveryServer(environment);
+            System.out.println("-=12==12-=12=-=12=213");
+            log.error("MY=-======================213");
+            System.out.println("Creating CustomTestingDiscoveryServer with environment: " + environment);
+            discoveryServer = new CustomTestingDiscoveryServer(environment);
+            log.error("MY=-=====================21313=");
+            log.warn("MY=-======================");
+            log.warn("environment %s", environment);
+            System.out.println("-=12==12-=12=-=12=");
             this.coordinatorCount = coordinatorCount;
             this.resourceManagerCount = resourceManagerCount;
             closer.register(() -> closeUnchecked(discoveryServer));
-            log.info("Created TestingDiscoveryServer in %s", nanosSince(start).convertToMostSuccinctTimeUnit());
+            log.info("Created TestingDiscoveryServer inn %s", nanosSince(start).convertToMostSuccinctTimeUnit());
             URI discoveryUrl = discoveryServer.getBaseUrl();
             log.info("Discovery URL %s", discoveryUrl);
 

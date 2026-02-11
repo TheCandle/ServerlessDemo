@@ -11,7 +11,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-sed -i "s|http://127.0.0.1:<replace_port>|http://127.0.0.1:$SERVER_PORT|" /opt/presto-server/etc/config.properties
+echo "SERVER_HOST=$SERVER_HOST"
+echo "SERVER_PORT=$SERVER_PORT"
+echo "WORKER_PORT=$WORKER_PORT"
+
+sed -i "s|http://<replace_host>:<replace_port>|http://$SERVER_HOST:$SERVER_PORT|" /opt/presto-server/etc/config.properties
 sed -i "s|http-server.http.port=7777|http-server.http.port=$WORKER_PORT|" /opt/presto-server/etc/config.properties
 
-GLOG_logtostderr=1 presto_server --etc-dir=/opt/presto-server/etc
+GLOG_logtostderr=1 presto_server --etc-dir=/opt/presto-server/etc &
+echo "start watchdog"
+/usr/bin/fwatchdog
