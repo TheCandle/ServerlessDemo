@@ -17,8 +17,13 @@ import com.facebook.airlift.concurrent.SetThreadName;
 import com.facebook.airlift.units.Duration;
 import com.facebook.presto.Session;
 import com.facebook.presto.common.InvalidFunctionArgumentException;
+import com.facebook.presto.common.QualifiedObjectName;
 import com.facebook.presto.common.analyzer.PreparedQuery;
+import com.facebook.presto.common.block.SortOrder;
+import com.facebook.presto.common.function.OperatorType;
+import com.facebook.presto.common.predicate.TupleDomain;
 import com.facebook.presto.common.resourceGroups.QueryType;
+import com.facebook.presto.common.type.*;
 import com.facebook.presto.cost.CostCalculator;
 import com.facebook.presto.cost.HistoryBasedPlanStatisticsManager;
 import com.facebook.presto.cost.StatsCalculator;
@@ -34,25 +39,21 @@ import com.facebook.presto.memory.VersionedMemoryPoolId;
 import com.facebook.presto.metadata.InternalNodeManager;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.server.BasicQueryInfo;
-import com.facebook.presto.spi.ConnectorId;
-import com.facebook.presto.spi.PrestoException;
-import com.facebook.presto.spi.QueryId;
-import com.facebook.presto.spi.VariableAllocator;
-import com.facebook.presto.spi.WarningCollector;
+import com.facebook.presto.spi.*;
 import com.facebook.presto.spi.analyzer.AnalyzerContext;
 import com.facebook.presto.spi.analyzer.AnalyzerProvider;
 import com.facebook.presto.spi.analyzer.QueryAnalysis;
 import com.facebook.presto.spi.analyzer.QueryAnalyzer;
+import com.facebook.presto.spi.function.FunctionHandle;
 import com.facebook.presto.spi.function.FunctionKind;
-import com.facebook.presto.spi.plan.OutputNode;
-import com.facebook.presto.spi.plan.PartitioningHandle;
-import com.facebook.presto.spi.plan.PlanNode;
-import com.facebook.presto.spi.plan.PlanNodeIdAllocator;
+import com.facebook.presto.spi.plan.*;
+import com.facebook.presto.spi.relation.CallExpression;
 import com.facebook.presto.spi.resourceGroups.ResourceGroupQueryLimits;
 import com.facebook.presto.spi.security.AccessControl;
 import com.facebook.presto.split.CloseableSplitSourceProvider;
 import com.facebook.presto.split.SplitManager;
 import com.facebook.presto.sql.Optimizer;
+import com.facebook.presto.sql.analyzer.TypeSignatureProvider;
 import com.facebook.presto.sql.parser.SqlParser;
 import com.facebook.presto.sql.planner.CanonicalPlanWithInfo;
 import com.facebook.presto.sql.planner.InputExtractor;
@@ -65,15 +66,18 @@ import com.facebook.presto.sql.planner.SplitSourceFactory;
 import com.facebook.presto.sql.planner.SubPlan;
 import com.facebook.presto.sql.planner.optimizations.PlanOptimizer;
 import com.facebook.presto.sql.planner.sanity.PlanChecker;
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.util.concurrent.ListenableFuture;
+import com.facebook.presto.spi.relation.ConstantExpression;
+import com.facebook.presto.spi.relation.RowExpression;
+import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.google.errorprone.annotations.ThreadSafe;
+import io.airlift.slice.Slices;
 import jakarta.inject.Inject;
 
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
@@ -567,17 +571,409 @@ public class SqlQueryExecution
                         this::doCreateLogicalPlanAndOptimize);
     }
 
+    private PlanNode createHardcodedPlanNode()
+    {
+        // Produce pre-aggregated TPCH Q1 output columns (one sample row)
+        // VariableReferenceExpression returnFlag = analyzerContext.getVariableAllocator().newVariable("l_returnflag", VarcharType.VARCHAR);
+        // VariableReferenceExpression lineStatus = analyzerContext.getVariableAllocator().newVariable("l_linestatus", VarcharType.VARCHAR);
+        VariableReferenceExpression sumQty = analyzerContext.getVariableAllocator().newVariable("sum_qty", DoubleType.DOUBLE);
+        VariableReferenceExpression sumBasePrice = analyzerContext.getVariableAllocator().newVariable("sum_base_price", DoubleType.DOUBLE);
+        VariableReferenceExpression sumDiscPrice = analyzerContext.getVariableAllocator().newVariable("sum_disc_price", DoubleType.DOUBLE);
+        VariableReferenceExpression sumCharge = analyzerContext.getVariableAllocator().newVariable("sum_charge", DoubleType.DOUBLE);
+        VariableReferenceExpression avgQty = analyzerContext.getVariableAllocator().newVariable("avg_qty", DoubleType.DOUBLE);
+        VariableReferenceExpression avgPrice = analyzerContext.getVariableAllocator().newVariable("avg_price", DoubleType.DOUBLE);
+        VariableReferenceExpression avgDisc = analyzerContext.getVariableAllocator().newVariable("avg_disc", DoubleType.DOUBLE);
+        VariableReferenceExpression countOrder = analyzerContext.getVariableAllocator().newVariable("count_order", BigintType.BIGINT);
+
+        java.util.List<VariableReferenceExpression> outputVariables = java.util.Arrays.asList(
+//            returnFlag,
+//            lineStatus,
+            sumQty,
+            sumBasePrice,
+            sumDiscPrice,
+            sumCharge,
+            avgQty,
+            avgPrice,
+            avgDisc,
+            countOrder
+        );
+
+        java.util.List<RowExpression> row = java.util.Arrays.<RowExpression>asList(
+            // new ConstantExpression("N", VarcharType.VARCHAR),
+            // new ConstantExpression("O", VarcharType.VARCHAR),
+            new ConstantExpression(1000.0, DoubleType.DOUBLE),
+            new ConstantExpression(12345.67, DoubleType.DOUBLE),
+            new ConstantExpression(11728.03, DoubleType.DOUBLE),
+            new ConstantExpression(12345.67, DoubleType.DOUBLE),
+            new ConstantExpression(25.0, DoubleType.DOUBLE),
+            new ConstantExpression(123.45, DoubleType.DOUBLE),
+            new ConstantExpression(0.05, DoubleType.DOUBLE),
+            new ConstantExpression(10L, BigintType.BIGINT)
+        );
+
+        java.util.List<RowExpression> row2 = java.util.Arrays.<RowExpression>asList(
+                // new ConstantExpression("N", VarcharType.VARCHAR),
+                // new ConstantExpression("O", VarcharType.VARCHAR),
+                new ConstantExpression(100.0, DoubleType.DOUBLE),
+                new ConstantExpression(12345.67, DoubleType.DOUBLE),
+                new ConstantExpression(11728.03, DoubleType.DOUBLE),
+                new ConstantExpression(12345.67, DoubleType.DOUBLE),
+                new ConstantExpression(25.0, DoubleType.DOUBLE),
+                new ConstantExpression(123.45, DoubleType.DOUBLE),
+                new ConstantExpression(0.05, DoubleType.DOUBLE),
+                new ConstantExpression(10L, BigintType.BIGINT)
+        );
+        java.util.List<java.util.List<RowExpression>> rows = java.util.Arrays.asList(row, row2);
+//        java.util.List<java.util.List<RowExpression>> rows = java.util.Collections.singletonList(row);
+
+        PlanNode values = new ValuesNode(java.util.Optional.empty(), idAllocator.getNextId(), outputVariables, rows, java.util.Optional.empty());
+
+//        RowExpression predicate = new ConstantExpression(false, BooleanType.BOOLEAN);
+
+        FunctionHandle greaterThan = metadata.getFunctionAndTypeManager().resolveOperator(
+                OperatorType.GREATER_THAN,
+                TypeSignatureProvider.fromTypes(DoubleType.DOUBLE, DoubleType.DOUBLE)
+        );
+        RowExpression predicate = new CallExpression(
+                OperatorType.GREATER_THAN.name(),
+                greaterThan,
+                BooleanType.BOOLEAN,
+                Arrays.asList(sumQty, new ConstantExpression(500.0, DoubleType.DOUBLE))
+        );
+
+        PlanNode filterNode = new FilterNode(
+                java.util.Optional.empty(),
+                idAllocator.getNextId(),
+                values,      // 子节点
+                predicate    // 过滤条件
+        );
+
+        java.util.List<String> columnNames = java.util.Arrays.asList(
+//            "l_returnflag",
+//            "l_linestatus",
+            "sum_qty",
+            "sum_base_price",
+            "sum_disc_price",
+            "sum_charge",
+            "avg_qty",
+            "avg_price",
+            "avg_disc",
+            "count_order"
+        );
+        return new OutputNode(java.util.Optional.empty(), idAllocator.getNextId(), filterNode, columnNames, outputVariables);
+    }
+
+    private PlanNode createTpch1()
+    {
+        VariableReferenceExpression returnFlag = analyzerContext.getVariableAllocator().newVariable("l_returnflag", VarcharType.VARCHAR);
+        VariableReferenceExpression lineStatus  = analyzerContext.getVariableAllocator().newVariable("l_linestatus", VarcharType.VARCHAR);
+        VariableReferenceExpression shipDate  = analyzerContext.getVariableAllocator().newVariable("l_shipdate", TimestampType.TIMESTAMP);
+        VariableReferenceExpression quantity  = analyzerContext.getVariableAllocator().newVariable("l_quantity", DoubleType.DOUBLE);
+
+
+        // 聚合输出字段
+        VariableReferenceExpression sumQty = analyzerContext.getVariableAllocator().newVariable("sum_qty", DoubleType.DOUBLE);
+
+        // 解析 <= 操作符
+        FunctionHandle lessThanOrEqual = metadata.getFunctionAndTypeManager().resolveOperator(
+                OperatorType.LESS_THAN_OR_EQUAL,
+                TypeSignatureProvider.fromTypes(TimestampType.TIMESTAMP, TimestampType.TIMESTAMP)
+        );
+
+        // 构建谓词：shipDate <= 1998-08-04 (时间戳在 Presto 内部通常是 Long 毫秒)
+        RowExpression filterPredicate = new CallExpression(
+                OperatorType.LESS_THAN_OR_EQUAL.name(),
+                lessThanOrEqual,
+                BooleanType.BOOLEAN,
+                Arrays.asList(
+                        shipDate,
+                        new ConstantExpression(881280000000L, TimestampType.TIMESTAMP) // 示例时间戳数值
+                )
+        );
+
+        // 准备一行模拟数据
+        List<RowExpression> row = Arrays.asList(
+                new ConstantExpression(Slices.utf8Slice("N"), VarcharType.VARCHAR),
+                new ConstantExpression(Slices.utf8Slice("O"), VarcharType.VARCHAR),
+                new ConstantExpression(881280000000L, TimestampType.TIMESTAMP), // 1998-08-04
+                new ConstantExpression(10.0, DoubleType.DOUBLE)
+        );
+
+        List<RowExpression> row2 = Arrays.asList(
+                new ConstantExpression(Slices.utf8Slice("N"), VarcharType.VARCHAR),
+                new ConstantExpression(Slices.utf8Slice("O"), VarcharType.VARCHAR),
+                new ConstantExpression(881280000000L, TimestampType.TIMESTAMP), // 1998-08-04
+                new ConstantExpression(30.0, DoubleType.DOUBLE)
+        );
+
+        List<RowExpression> row3 = Arrays.asList(
+                new ConstantExpression(Slices.utf8Slice("N"), VarcharType.VARCHAR),
+                new ConstantExpression(Slices.utf8Slice("O"), VarcharType.VARCHAR),
+                new ConstantExpression(881280000000L, TimestampType.TIMESTAMP), // 1998-08-04
+                new ConstantExpression(2.0, DoubleType.DOUBLE)
+        );
+
+        java.util.List<java.util.List<RowExpression>> rows = java.util.Arrays.asList(row, row2, row3);
+
+
+        List<VariableReferenceExpression> sourceVariables = Arrays.asList(returnFlag, lineStatus, shipDate, quantity);
+        PlanNode sourceNode = new ValuesNode(
+                Optional.empty(),
+                idAllocator.getNextId(),
+                sourceVariables,
+                rows,
+                Optional.empty()
+        );
+
+        PlanNode filterNode = new FilterNode(Optional.empty(), idAllocator.getNextId(), sourceNode, filterPredicate);
+
+
+        // agg node
+        // 1. 定义 Grouping Keys
+        List<VariableReferenceExpression> groupingKeys = Arrays.asList(returnFlag, lineStatus);
+
+        // 2. 定义聚合函数 (以 SUM(l_quantity) 为例)
+        FunctionHandle sumHandle = metadata.getFunctionAndTypeManager().lookupFunction("sum",
+                TypeSignatureProvider.fromTypes(DoubleType.DOUBLE));
+
+        AggregationNode.Aggregation sumAggregation = new AggregationNode.Aggregation(
+                new CallExpression("sum", sumHandle, DoubleType.DOUBLE, Collections.singletonList(quantity)),
+                Optional.empty(), Optional.empty(), false, Optional.empty()
+        );
+
+        Map<VariableReferenceExpression, AggregationNode.Aggregation> aggregations = new HashMap<>();
+        aggregations.put(sumQty, sumAggregation);
+
+        AggregationNode.GroupingSetDescriptor groupingSetsDescriptor = new AggregationNode.GroupingSetDescriptor(
+                groupingKeys,               // List<VariableReferenceExpression>
+                1,                          // groupingSetCount
+                ImmutableSet.of()           // globalGroupingSets
+        );
+
+        AggregationNode aggregationNode = new AggregationNode(
+                Optional.empty(),                // sourceLocation (Optional<SourceLocation>)
+                idAllocator.getNextId(),         // id (PlanNodeId)
+                filterNode,                      // source (PlanNode)
+                aggregations,                    // aggregations (Map<VariableReferenceExpression, Aggregation>)
+                groupingSetsDescriptor,          // groupingSets (GroupingSetDescriptor)
+                ImmutableList.of(),              // preGroupedVariables (List<VariableReferenceExpression>)
+                AggregationNode.Step.SINGLE,     // step (Step)
+                Optional.empty(),                // hashVariable (Optional<VariableReferenceExpression>)
+                Optional.empty(),                // groupIdVariable (Optional<VariableReferenceExpression>)
+                Optional.empty()                 // aggregationId (Optional<Integer>) -> 你之前漏掉的就是这个！
+        );
+
+
+        // sort node
+
+        List<Ordering> orderBy = new ArrayList<>();
+        orderBy.add(new Ordering(returnFlag, SortOrder.ASC_NULLS_LAST));
+        orderBy.add(new Ordering(lineStatus, SortOrder.ASC_NULLS_LAST));
+
+        OrderingScheme orderingScheme = new OrderingScheme(orderBy);
+
+        SortNode sortNode = new SortNode(
+                Optional.empty(),               // sourceLocation (Optional<SourceLocation>)
+                idAllocator.getNextId(),        // id (PlanNodeId)
+                aggregationNode,                // source (这是 AggregationNode 的输出)
+                orderingScheme,                 // orderingScheme (刚才定义的排序规则)
+                false,                          // isPartial (是否是局部排序？通常填 false 表示最终全局排序)
+                ImmutableList.of()              // partitionBy (分区排序字段。源码注释写了：空 List 表示全局排序)
+        );
+
+        // output node
+        List<String> columnNames = Arrays.asList("l_returnflag", "l_linestatus", "sum_qty");
+        List<VariableReferenceExpression> outputVariables = Arrays.asList(returnFlag, lineStatus, sumQty);
+
+        PlanNode root = new OutputNode(
+                Optional.empty(),
+                idAllocator.getNextId(),
+                sortNode,
+                columnNames,
+                outputVariables
+        );
+        return root;
+    }
+
+    private PlanNode createTpch1S()
+    {
+        VariableReferenceExpression returnFlag = analyzerContext.getVariableAllocator().newVariable("l_returnflag", VarcharType.VARCHAR);
+        VariableReferenceExpression lineStatus  = analyzerContext.getVariableAllocator().newVariable("l_linestatus", VarcharType.VARCHAR);
+        VariableReferenceExpression shipDate  = analyzerContext.getVariableAllocator().newVariable("l_shipdate", DateType.DATE);
+        VariableReferenceExpression quantity  = analyzerContext.getVariableAllocator().newVariable("l_quantity", DoubleType.DOUBLE);
+
+
+        // 聚合输出字段
+        VariableReferenceExpression sumQty = analyzerContext.getVariableAllocator().newVariable("sum_qty", DoubleType.DOUBLE);
+
+        // 解析 <= 操作符
+        FunctionHandle lessThanOrEqual = metadata.getFunctionAndTypeManager().resolveOperator(
+                OperatorType.LESS_THAN_OR_EQUAL,
+                TypeSignatureProvider.fromTypes(DateType.DATE, DateType.DATE)
+        );
+
+        // 构建谓词：shipDate <= 1998-08-04 (时间戳在 Presto 内部通常是 Long 毫秒)
+        RowExpression filterPredicate = new CallExpression(
+                OperatorType.LESS_THAN_OR_EQUAL.name(),
+                lessThanOrEqual,
+                BooleanType.BOOLEAN,
+                Arrays.asList(
+                        shipDate,
+                        new ConstantExpression(881280000000L, DateType.DATE) // 示例时间戳数值
+                )
+        );
+
+        // 1. 定位表 (假设使用 tpch connector)
+        QualifiedObjectName tableName = new QualifiedObjectName("tpchstandard", "tiny", "lineitem");
+        Optional<TableHandle> tableHandle = metadata.getHandleVersion(
+                getSession(),
+                tableName,
+                Optional.empty() // 这里的类型是 Optional<ConnectorTableVersion>
+        );
+
+        if (!tableHandle.isPresent()) {
+            throw new RuntimeException("Table not found: " + tableName);
+        }
+
+        TableHandle handle = tableHandle.get();
+        // 获取该表的所有列句柄
+        // 该方法返回一个 Map，Key 是列名 (String)，Value 是列句柄 (ColumnHandle)
+        Map<String, ColumnHandle> columnHandles = metadata.getColumnHandles(getSession(), handle);
+
+        System.out.println("Available columns: " + columnHandles.keySet());
+
+        List<VariableReferenceExpression> outputVariables = Arrays.asList(returnFlag, lineStatus, shipDate, quantity);
+
+        // 建立 变量 -> 列句柄 的映射
+        ImmutableMap.Builder<VariableReferenceExpression, ColumnHandle> assignments = ImmutableMap.builder();
+        assignments.put(returnFlag, columnHandles.get("l_returnflag"));
+        assignments.put(lineStatus, columnHandles.get("l_linestatus"));
+        assignments.put(shipDate, columnHandles.get("l_shipdate"));
+        assignments.put(quantity, columnHandles.get("l_quantity"));
+
+        // 4. 创建 TableScanNode
+        PlanNode sourceNode = new TableScanNode(
+                Optional.empty(),               // 1. sourceLocation
+                idAllocator.getNextId(),        // 2. id
+                tableHandle.get(),                    // 3. table (你的 TableHandle 对象)
+                outputVariables,                // 4. outputVariables
+                assignments.build(),            // 5. assignments
+                TupleDomain.all(),              // 6. currentConstraint (关键：不要传 null)
+                TupleDomain.all(),              // 7. enforcedConstraint (关键：解决报错的核心)
+                Optional.empty()                // 8. cteMaterializationInfo (传 Optional.empty())
+        );
+
+
+        PlanNode filterNode = new FilterNode(Optional.empty(), idAllocator.getNextId(), sourceNode, filterPredicate);
+
+
+        // agg node
+        // 1. 定义 Grouping Keys
+        List<VariableReferenceExpression> groupingKeys = Arrays.asList(returnFlag, lineStatus);
+
+        // 2. 定义聚合函数 (以 SUM(l_quantity) 为例)
+        FunctionHandle sumHandle = metadata.getFunctionAndTypeManager().lookupFunction("sum",
+                TypeSignatureProvider.fromTypes(DoubleType.DOUBLE));
+
+        AggregationNode.Aggregation sumAggregation = new AggregationNode.Aggregation(
+                new CallExpression("sum", sumHandle, DoubleType.DOUBLE, Collections.singletonList(quantity)),
+                Optional.empty(), Optional.empty(), false, Optional.empty()
+        );
+
+        Map<VariableReferenceExpression, AggregationNode.Aggregation> aggregations = new HashMap<>();
+        aggregations.put(sumQty, sumAggregation);
+
+        AggregationNode.GroupingSetDescriptor groupingSetsDescriptor = new AggregationNode.GroupingSetDescriptor(
+                groupingKeys,               // List<VariableReferenceExpression>
+                1,                          // groupingSetCount
+                ImmutableSet.of()           // globalGroupingSets
+        );
+
+        AggregationNode aggregationNode = new AggregationNode(
+                Optional.empty(),                // sourceLocation (Optional<SourceLocation>)
+                idAllocator.getNextId(),         // id (PlanNodeId)
+                filterNode,                      // source (PlanNode)
+                aggregations,                    // aggregations (Map<VariableReferenceExpression, Aggregation>)
+                groupingSetsDescriptor,          // groupingSets (GroupingSetDescriptor)
+                ImmutableList.of(),              // preGroupedVariables (List<VariableReferenceExpression>)
+                AggregationNode.Step.SINGLE,     // step (Step)
+                Optional.empty(),                // hashVariable (Optional<VariableReferenceExpression>)
+                Optional.empty(),                // groupIdVariable (Optional<VariableReferenceExpression>)
+                Optional.empty()                 // aggregationId (Optional<Integer>) -> 你之前漏掉的就是这个！
+        );
+
+
+        // sort node
+
+        List<Ordering> orderBy = new ArrayList<>();
+        orderBy.add(new Ordering(returnFlag, SortOrder.ASC_NULLS_LAST));
+        orderBy.add(new Ordering(lineStatus, SortOrder.ASC_NULLS_LAST));
+
+        OrderingScheme orderingScheme = new OrderingScheme(orderBy);
+
+        SortNode sortNode = new SortNode(
+                Optional.empty(),               // sourceLocation (Optional<SourceLocation>)
+                idAllocator.getNextId(),        // id (PlanNodeId)
+                aggregationNode,                // source (这是 AggregationNode 的输出)
+                orderingScheme,                 // orderingScheme (刚才定义的排序规则)
+                false,                          // isPartial (是否是局部排序？通常填 false 表示最终全局排序)
+                ImmutableList.of()              // partitionBy (分区排序字段。源码注释写了：空 List 表示全局排序)
+        );
+
+        // output node
+        List<String> columnNames = Arrays.asList("l_returnflag", "l_linestatus", "l_sum_qty");
+        List<VariableReferenceExpression> outputVariables2 = Arrays.asList(returnFlag, lineStatus, sumQty);
+
+        PlanNode root = new OutputNode(
+                Optional.empty(),
+                idAllocator.getNextId(),
+                sortNode,
+                columnNames,
+                outputVariables2
+        );
+        return root;
+    }
+
     private PlanRoot doCreateLogicalPlanAndOptimize()
     {
         try {
             // time analysis phase
             stateMachine.beginAnalysis();
 
-            PlanNode planNode = stateMachine.getSession()
-                    .getRuntimeStats()
-                    .recordWallAndCpuTime(
-                            LOGICAL_PLANNER_TIME_NANOS,
-                            () -> queryAnalyzer.plan(this.analyzerContext, queryAnalysis));
+            PlanNode planNode;
+            TpchPlanTree tpchPlanTree = new TpchPlanTree(analyzerContext, metadata, idAllocator, stateMachine);
+            switch (this.query) {
+                case "select Q1":
+                  planNode = tpchPlanTree.getQ1();
+                  break;
+                case "select Q6":
+                  planNode = tpchPlanTree.getQ6();
+                  break;
+                case "select Q12":
+                  planNode = tpchPlanTree.getQ12();
+                  break;
+                case "select Q13":
+                  planNode = tpchPlanTree.getQ13();
+                  break;
+                case "select Q14":
+                  planNode = tpchPlanTree.getQ14();
+                  break;
+                case "select Q17":
+                  planNode = tpchPlanTree.getQ17();
+                  break;
+                case "select Q18":
+                  planNode = tpchPlanTree.getQ18();
+                  break;
+                case "select Q19":
+                  planNode = tpchPlanTree.getQ19();
+                  break;
+                default:
+                  planNode = stateMachine.getSession()
+                        .getRuntimeStats()
+                        .recordWallAndCpuTime(
+                                LOGICAL_PLANNER_TIME_NANOS,
+                                () -> queryAnalyzer.plan(this.analyzerContext, queryAnalysis));    
+            }
 
             Optimizer optimizer = new Optimizer(
                     stateMachine.getSession(),
