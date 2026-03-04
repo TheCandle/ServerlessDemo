@@ -111,7 +111,7 @@ public class TpchPlanTree {
         );
 
         // 1. 定位表 (假设使用 tpch connector)
-        QualifiedObjectName tableName = new QualifiedObjectName("tpchstandard", "tiny", "lineitem");
+        QualifiedObjectName tableName = new QualifiedObjectName("hive", "tpch_test", "lineitem");
         Optional<TableHandle> tableHandle = metadata.getHandleVersion(
                 getSession(),
                 tableName,
@@ -258,7 +258,9 @@ public class TpchPlanTree {
         VariableReferenceExpression count_1 = analyzerContext.getVariableAllocator().newVariable("count_1", BigintType.BIGINT);
 
 // --- TableScanNode Start: n1 (lineitem) ---
-        QualifiedObjectName tableName_n1 = new QualifiedObjectName("tpchstandard", "tiny", "lineitem");
+        // QualifiedObjectName tableName_n1 = new QualifiedObjectName("hive", "tpch_test", "lineitem");
+        // QualifiedObjectName tableName_n1 = new QualifiedObjectName("tpch", "sf100", "lineitem");
+        QualifiedObjectName tableName_n1 = new QualifiedObjectName("hive", "tpch_test", "lineitem");
         Optional<TableHandle> tableHandle_n1 = metadata.getHandleVersion(
                 getSession(),
                 tableName_n1,
@@ -525,7 +527,9 @@ public class TpchPlanTree {
         VariableReferenceExpression sum_l_extendedprice___l_discount = analyzerContext.getVariableAllocator().newVariable("sum_l_extendedprice___l_discount", DoubleType.DOUBLE);
 
 // --- TableScanNode Start: n1 (lineitem) ---
-        QualifiedObjectName tableName_n1 = new QualifiedObjectName("tpchstandard", "tiny", "lineitem");
+        // QualifiedObjectName tableName_n1 = new QualifiedObjectName("hive", "tpch_test", "lineitem");
+        // QualifiedObjectName tableName_n1 = new QualifiedObjectName("tpch", "sf100", "lineitem");
+        QualifiedObjectName tableName_n1 = new QualifiedObjectName("hive", "tpch_test", "lineitem");
         Optional<TableHandle> tableHandle_n1 = metadata.getHandleVersion(
                 getSession(),
                 tableName_n1,
@@ -670,7 +674,7 @@ public class TpchPlanTree {
         VariableReferenceExpression sum_l_extendedprice____cast_1_as_double____l_discount = analyzerContext.getVariableAllocator().newVariable("sum_l_extendedprice____cast_1_as_double____l_discount", DoubleType.DOUBLE);
 
 // --- TableScanNode Start: n1 (lineitem) ---
-        QualifiedObjectName tableName_n1 = new QualifiedObjectName("tpchstandard", "tiny", "lineitem");
+        QualifiedObjectName tableName_n1 = new QualifiedObjectName("hive", "tpch_test", "lineitem");
         Optional<TableHandle> tableHandle_n1 = metadata.getHandleVersion(
                 getSession(),
                 tableName_n1,
@@ -709,7 +713,7 @@ public class TpchPlanTree {
         );
         // --- TableScanNode End: n1 ---
 // --- TableScanNode Start: n2 (part) ---
-        QualifiedObjectName tableName_n2 = new QualifiedObjectName("tpchstandard", "tiny", "part");
+        QualifiedObjectName tableName_n2 = new QualifiedObjectName("hive", "tpch_test", "part");
         Optional<TableHandle> tableHandle_n2 = metadata.getHandleVersion(
                 getSession(),
                 tableName_n2,
@@ -907,7 +911,7 @@ public class TpchPlanTree {
         VariableReferenceExpression sum_CASE_WHEN___o_orderpriority_____1_URGENT___bpchar__AND__o_orderpriority_____2_HIGH___bpchar___THEN_1_ELSE_0_END = analyzerContext.getVariableAllocator().newVariable("sum_low_priority_flag", BigintType.BIGINT);
 
 // --- TableScanNode Start: n1 (lineitem) ---
-        QualifiedObjectName tableName_n1 = new QualifiedObjectName("tpchstandard", "tiny", "lineitem");
+        QualifiedObjectName tableName_n1 = new QualifiedObjectName("hive", "tpch_test", "lineitem");
         Optional<TableHandle> tableHandle_n1 = metadata.getHandleVersion(
                 getSession(),
                 tableName_n1,
@@ -974,7 +978,7 @@ public class TpchPlanTree {
                 n1child.getOutputVariables().stream().map(v -> v.getName()).collect(Collectors.toList()));
         // --- FilterNode End: n1child ---
 // --- TableScanNode Start: n2 (orders) ---
-        QualifiedObjectName tableName_n2 = new QualifiedObjectName("tpchstandard", "tiny", "orders");
+        QualifiedObjectName tableName_n2 = new QualifiedObjectName("hive", "tpch_test", "orders");
         Optional<TableHandle> tableHandle_n2 = metadata.getHandleVersion(
                 getSession(),
                 tableName_n2,
@@ -1219,7 +1223,7 @@ public class TpchPlanTree {
         VariableReferenceExpression count_all = analyzerContext.getVariableAllocator().newVariable("count_all", BigintType.BIGINT);
 
 // --- TableScanNode Start: n1 (orders) ---
-        QualifiedObjectName tableName_n1 = new QualifiedObjectName("tpchstandard", "tiny", "orders");
+        QualifiedObjectName tableName_n1 = new QualifiedObjectName("hive", "tpch_test", "orders");
         Optional<TableHandle> tableHandle_n1 = metadata.getHandleVersion(
                 getSession(),
                 tableName_n1,
@@ -1284,7 +1288,7 @@ public class TpchPlanTree {
                 n1child.getOutputVariables().stream().map(v -> v.getName()).collect(Collectors.toList()));
         // --- FilterNode End: n1child ---
 // --- TableScanNode Start: n2 (customer) ---
-        QualifiedObjectName tableName_n2 = new QualifiedObjectName("tpchstandard", "tiny", "customer");
+        QualifiedObjectName tableName_n2 = new QualifiedObjectName("hive", "tpch_test", "customer");
         Optional<TableHandle> tableHandle_n2 = metadata.getHandleVersion(
                 getSession(),
                 tableName_n2,
@@ -1570,7 +1574,7 @@ public class TpchPlanTree {
 
 
 // --- TableScanNode Start: n1 (lineitem) ---
-        QualifiedObjectName tableName_n1 = new QualifiedObjectName("tpchstandard", "tiny", "lineitem");
+        QualifiedObjectName tableName_n1 = new QualifiedObjectName("hive", "tpch_test", "lineitem");
         Optional<TableHandle> tableHandle_n1 = metadata.getHandleVersion(
                 getSession(),
                 tableName_n1,
@@ -1635,7 +1639,7 @@ public class TpchPlanTree {
                 n1child.getOutputVariables().stream().map(v -> v.getName()).collect(Collectors.toList()));
         // --- FilterNode End: n1child ---
 // --- TableScanNode Start: n2 (part) ---
-        QualifiedObjectName tableName_n2 = new QualifiedObjectName("tpchstandard", "tiny", "part");
+        QualifiedObjectName tableName_n2 = new QualifiedObjectName("hive", "tpch_test", "part");
         Optional<TableHandle> tableHandle_n2 = metadata.getHandleVersion(
                 getSession(),
                 tableName_n2,
@@ -1865,7 +1869,7 @@ public class TpchPlanTree {
 
 
 // --- TableScanNode Start: n1 (lineitem) ---
-        QualifiedObjectName tableName_n1 = new QualifiedObjectName("tpchstandard", "tiny", "lineitem");
+        QualifiedObjectName tableName_n1 = new QualifiedObjectName("hive", "tpch_test", "lineitem");
         Optional<TableHandle> tableHandle_n1 = metadata.getHandleVersion(
                 getSession(),
                 tableName_n1,
@@ -1904,7 +1908,7 @@ public class TpchPlanTree {
         );
         // --- TableScanNode End: n1 ---
 // --- TableScanNode Start: n2 (part) ---
-        QualifiedObjectName tableName_n2 = new QualifiedObjectName("tpchstandard", "tiny", "part");
+        QualifiedObjectName tableName_n2 = new QualifiedObjectName("hive", "tpch_test", "part");
         Optional<TableHandle> tableHandle_n2 = metadata.getHandleVersion(
                 getSession(),
                 tableName_n2,
@@ -1986,7 +1990,7 @@ public class TpchPlanTree {
                 ImmutableMap.of()
         );
 // --- TableScanNode Start: n4 (lineitem) ---
-        QualifiedObjectName tableName_n4 = new QualifiedObjectName("tpchstandard", "tiny", "lineitem");
+        QualifiedObjectName tableName_n4 = new QualifiedObjectName("hive", "tpch_test", "lineitem");
         Optional<TableHandle> tableHandle_n4 = metadata.getHandleVersion(
                 getSession(),
                 tableName_n4,
@@ -2023,7 +2027,7 @@ public class TpchPlanTree {
         );
         // --- TableScanNode End: n4 ---
 // --- TableScanNode Start: n5 (part) ---
-        QualifiedObjectName tableName_n5 = new QualifiedObjectName("tpchstandard", "tiny", "part");
+        QualifiedObjectName tableName_n5 = new QualifiedObjectName("hive", "tpch_test", "part");
         Optional<TableHandle> tableHandle_n5 = metadata.getHandleVersion(
                 getSession(),
                 tableName_n5,
@@ -2323,7 +2327,7 @@ public class TpchPlanTree {
         VariableReferenceExpression sum_l_quantity = analyzerContext.getVariableAllocator().newVariable("sum_l_quantity", DoubleType.DOUBLE);
 
 // --- TableScanNode Start: n1 (lineitem) ---
-        QualifiedObjectName tableName_n1 = new QualifiedObjectName("tpchstandard", "tiny", "lineitem");
+        QualifiedObjectName tableName_n1 = new QualifiedObjectName("hive", "tpch_test", "lineitem");
         Optional<TableHandle> tableHandle_n1 = metadata.getHandleVersion(
                 getSession(),
                 tableName_n1,
@@ -2360,7 +2364,7 @@ public class TpchPlanTree {
         );
         // --- TableScanNode End: n1 ---
 // --- TableScanNode Start: n2 (orders) ---
-        QualifiedObjectName tableName_n2 = new QualifiedObjectName("tpchstandard", "tiny", "orders");
+        QualifiedObjectName tableName_n2 = new QualifiedObjectName("hive", "tpch_test", "orders");
         Optional<TableHandle> tableHandle_n2 = metadata.getHandleVersion(
                 getSession(),
                 tableName_n2,
@@ -2401,7 +2405,7 @@ public class TpchPlanTree {
         );
         // --- TableScanNode End: n2 ---
 // --- TableScanNode Start: n3 (lineitem) ---
-        QualifiedObjectName tableName_n3 = new QualifiedObjectName("tpchstandard", "tiny", "lineitem");
+        QualifiedObjectName tableName_n3 = new QualifiedObjectName("hive", "tpch_test", "lineitem");
         Optional<TableHandle> tableHandle_n3 = metadata.getHandleVersion(
                 getSession(),
                 tableName_n3,
@@ -2555,7 +2559,7 @@ public class TpchPlanTree {
                 n6.getOutputVariables().stream().map(v -> v.getName()).collect(Collectors.toList()));
 
 // --- TableScanNode Start: n7 (customer) ---
-        QualifiedObjectName tableName_n7 = new QualifiedObjectName("tpchstandard", "tiny", "customer");
+        QualifiedObjectName tableName_n7 = new QualifiedObjectName("hive", "tpch_test", "customer");
         Optional<TableHandle> tableHandle_n7 = metadata.getHandleVersion(
                 getSession(),
                 tableName_n7,
@@ -2794,7 +2798,7 @@ public class TpchPlanTree {
         VariableReferenceExpression sum_l_extendedprice____cast_1_as_double___l_discount = analyzerContext.getVariableAllocator().newVariable("sum_l_extendedprice____cast_1_as_double___l_discount", DoubleType.DOUBLE);
 
 // --- TableScanNode Start: n1 (lineitem) ---
-        QualifiedObjectName tableName_n1 = new QualifiedObjectName("tpchstandard", "tiny", "lineitem");
+        QualifiedObjectName tableName_n1 = new QualifiedObjectName("hive", "tpch_test", "lineitem");
         Optional<TableHandle> tableHandle_n1 = metadata.getHandleVersion(
                 getSession(),
                 tableName_n1,
@@ -2855,7 +2859,7 @@ public class TpchPlanTree {
         );
         // --- FilterNode End: n1child ---
 // --- TableScanNode Start: n2 (part) ---
-        QualifiedObjectName tableName_n2 = new QualifiedObjectName("tpchstandard", "tiny", "part");
+        QualifiedObjectName tableName_n2 = new QualifiedObjectName("hive", "tpch_test", "part");
         Optional<TableHandle> tableHandle_n2 = metadata.getHandleVersion(
                 getSession(),
                 tableName_n2,
@@ -2911,17 +2915,29 @@ public class TpchPlanTree {
         // Join Filter 逻辑: (((part.p_brand = 'Brand#13'::bpchar) AND (part.p_container = ANY ('{"SM CASE","SM BOX","SM PACK","S...
 
 //        RowExpression join_filter_n3 = getRowExpression("((p_brand = 'Brand#13') AND (p_container IN ('SM CASE', 'SM BOX', 'SM PACK', 'SM PKG')) AND (l_quantity >= 6) AND (l_quantity <= 16) AND (p_size <= 5) OR (p_brand = 'Brand#24') AND (p_container IN ('MED BAG', 'MED BOX', 'MED PKG', 'MED PACK')) AND (l_quantity >= 16) AND (l_quantity <= 26) AND (p_size <= 10) OR (p_brand = 'Brand#22') AND (p_container IN ('LG CASE', 'LG BOX', 'LG PACK', 'LG PKG')) AND (l_quantity >= 26) AND (l_quantity <= 36) AND (p_size <= 15))");
+        // RowExpression join_filter_n3 = getRowExpression(
+        //         "((p_brand = CAST('Brand#13' AS VARCHAR)) AND " +
+        //                 "(p_container IN (CAST('SM CASE' AS VARCHAR), CAST('SM BOX' AS VARCHAR), CAST('SM PACK' AS VARCHAR), CAST('SM PKG' AS VARCHAR))) AND " +
+        //                 "(l_quantity >= 6) AND (l_quantity <= 16) AND (p_size <= 5)) " +
+        //                 "OR ((p_brand = CAST('Brand#24' AS VARCHAR)) AND " +
+        //                 "(p_container IN (CAST('MED BAG' AS VARCHAR), CAST('MED BOX' AS VARCHAR), CAST('MED PKG' AS VARCHAR), CAST('MED PACK' AS VARCHAR))) AND " +
+        //                 "(l_quantity >= 16) AND (l_quantity <= 26) AND (p_size <= 10)) " +
+        //                 "OR ((p_brand = CAST('Brand#22' AS VARCHAR)) AND " +
+        //                 "(p_container IN (CAST('LG CASE' AS VARCHAR), CAST('LG BOX' AS VARCHAR), CAST('LG PACK' AS VARCHAR), CAST('LG PKG' AS VARCHAR))) AND " +
+        //                 "(l_quantity >= 26) AND (l_quantity <= 36) AND (p_size <= 15))"
+        // );
         RowExpression join_filter_n3 = getRowExpression(
                 "((p_brand = CAST('Brand#13' AS VARCHAR)) AND " +
-                        "(p_container IN (CAST('SM CASE' AS VARCHAR), CAST('SM BOX' AS VARCHAR), CAST('SM PACK' AS VARCHAR), CAST('SM PKG' AS VARCHAR))) AND " +
-                        "(l_quantity >= 6) AND (l_quantity <= 16) AND (p_size <= 5)) " +
-                        "OR ((p_brand = CAST('Brand#24' AS VARCHAR)) AND " +
-                        "(p_container IN (CAST('MED BAG' AS VARCHAR), CAST('MED BOX' AS VARCHAR), CAST('MED PKG' AS VARCHAR), CAST('MED PACK' AS VARCHAR))) AND " +
-                        "(l_quantity >= 16) AND (l_quantity <= 26) AND (p_size <= 10)) " +
-                        "OR ((p_brand = CAST('Brand#22' AS VARCHAR)) AND " +
-                        "(p_container IN (CAST('LG CASE' AS VARCHAR), CAST('LG BOX' AS VARCHAR), CAST('LG PACK' AS VARCHAR), CAST('LG PKG' AS VARCHAR))) AND " +
-                        "(l_quantity >= 26) AND (l_quantity <= 36) AND (p_size <= 15))"
+                "(p_container IN (CAST('SM CASE' AS VARCHAR), CAST('SM BOX' AS VARCHAR), CAST('SM PACK' AS VARCHAR), CAST('SM PKG' AS VARCHAR))) AND " +
+                "(l_quantity >= CAST(6 AS DOUBLE)) AND (l_quantity <= CAST(16 AS DOUBLE)) AND (p_size <= 5)) " +
+                "OR ((p_brand = CAST('Brand#24' AS VARCHAR)) AND " +
+                "(p_container IN (CAST('MED BAG' AS VARCHAR), CAST('MED BOX' AS VARCHAR), CAST('MED PKG' AS VARCHAR), CAST('MED PACK' AS VARCHAR))) AND " +
+                "(l_quantity >= CAST(16 AS DOUBLE)) AND (l_quantity <= CAST(26 AS DOUBLE)) AND (p_size <= 10)) " +
+                "OR ((p_brand = CAST('Brand#22' AS VARCHAR)) AND " +
+                "(p_container IN (CAST('LG CASE' AS VARCHAR), CAST('LG BOX' AS VARCHAR), CAST('LG PACK' AS VARCHAR), CAST('LG PKG' AS VARCHAR))) AND " +
+                "(l_quantity >= CAST(26 AS DOUBLE)) AND (l_quantity <= CAST(36 AS DOUBLE)) AND (p_size <= 15))"
         );
+
         Optional<RowExpression> filter_n3 = Optional.of(join_filter_n3);
 
 

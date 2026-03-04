@@ -943,28 +943,28 @@ public class SqlQueryExecution
             PlanNode planNode;
             TpchPlanTree tpchPlanTree = new TpchPlanTree(analyzerContext, metadata, idAllocator, stateMachine);
             switch (this.query) {
-                case "select Q1":
+                case "select 1":
                   planNode = tpchPlanTree.getQ1();
                   break;
-                case "select Q6":
+                case "select 6":
                   planNode = tpchPlanTree.getQ6();
                   break;
-                case "select Q12":
+                case "select 12":
                   planNode = tpchPlanTree.getQ12();
                   break;
-                case "select Q13":
+                case "select 13":
                   planNode = tpchPlanTree.getQ13();
                   break;
-                case "select Q14":
+                case "select 14":
                   planNode = tpchPlanTree.getQ14();
                   break;
-                case "select Q17":
+                case "select 17":
                   planNode = tpchPlanTree.getQ17();
                   break;
-                case "select Q18":
+                case "select 18":
                   planNode = tpchPlanTree.getQ18();
                   break;
-                case "select Q19":
+                case "select 19":
                   planNode = tpchPlanTree.getQ19();
                   break;
                 default:
