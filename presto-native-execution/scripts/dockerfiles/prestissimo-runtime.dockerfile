@@ -43,6 +43,16 @@ FROM --platform=${TARGETPLATFORM:-linux/amd64} ghcr.io/openfaas/of-watchdog:0.10
 
 FROM ${BASE_IMAGE}
 
+# 安装 Java 1.8（提供 libjvm）
+RUN dnf install -y java-1.8.0-openjdk-devel && \
+    dnf clean all
+
+# 设置 JAVA_HOME 环境变量（符号链接，自动指向具体版本）
+ENV JAVA_HOME=/usr/lib/jvm/java-1.8.0-openjdk
+
+# 设置 LD_LIBRARY_PATH 以包含 libjvm.so 所在目录
+ENV LD_LIBRARY_PATH=$JAVA_HOME/jre/lib/amd64/server:$LD_LIBRARY_PATH
+
 COPY --from=watchdog /fwatchdog /usr/bin/fwatchdog
 RUN chmod +x /usr/bin/fwatchdog
 
