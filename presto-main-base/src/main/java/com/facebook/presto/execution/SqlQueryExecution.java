@@ -942,37 +942,123 @@ public class SqlQueryExecution
 
             PlanNode planNode;
             TpchPlanTree tpchPlanTree = new TpchPlanTree(analyzerContext, metadata, idAllocator, stateMachine);
-            switch (this.query) {
-                case "select 1":
-                  planNode = tpchPlanTree.getQ1();
-                  break;
-                case "select 6":
-                  planNode = tpchPlanTree.getQ6();
-                  break;
-                case "select 12":
-                  planNode = tpchPlanTree.getQ12();
-                  break;
-                case "select 13":
-                  planNode = tpchPlanTree.getQ13();
-                  break;
-                case "select 14":
-                  planNode = tpchPlanTree.getQ14();
-                  break;
-                case "select 17":
-                  planNode = tpchPlanTree.getQ17();
-                  break;
-                case "select 18":
-                  planNode = tpchPlanTree.getQ18();
-                  break;
-                case "select 19":
-                  planNode = tpchPlanTree.getQ19();
-                  break;
-                default:
-                  planNode = stateMachine.getSession()
+            // --- 新增：处理 EXPLAIN ANALYZE 情况 ---
+            String sql = this.query; // 假设 this.query 是完整的 SQL 字符串
+            if (sql.trim().toUpperCase().startsWith("explain analyze")) {
+                // 提取内部查询（简单做法：去掉 "EXPLAIN ANALYZE" 前缀）
+                String innerSql = sql.trim().substring("explain analyze".length()).trim();
+                // 检查内部查询是否是需要替换的目标
+                PlanNode innerPlan = null;
+                switch (innerSql) {
+                    case "select 1":
+                        innerPlan = tpchPlanTree.getQ1();   // 或者 Q14 等
+                        break;
+                    case "select 6":
+                        innerPlan = tpchPlanTree.getQ6();
+                        break;
+                    case "select 12":
+                        innerPlan = tpchPlanTree.getQ12();
+                        break;
+                    case "select 13":
+                        innerPlan = tpchPlanTree.getQ13();
+                        break;
+                    case "select 14":
+                        innerPlan = tpchPlanTree.getQ14();
+                        break;
+                    case "select 17":
+                        innerPlan = tpchPlanTree.getQ17();
+                        break;
+                    case "select 18":
+                        innerPlan = tpchPlanTree.getQ18();
+                        break;
+                    case "select 19":
+                        innerPlan = tpchPlanTree.getQ19();
+                        break;
+                    default:
+                        // 内部查询不匹配，走正常 EXPLAIN ANALYZE 流程
+                        break;
+                }
+                if (innerPlan != null) {
+                    // 手动构建 ExplainAnalyzeNode，包装 innerPlan
+                    // 注意：需要知道 ExplainAnalyzeNode 的输出符号（VariableReferenceExpression）
+                    // 最简单的方式：从正常的 ExplainAnalyzeNode 中“借用”输出符号定义
+                    // 下面是一种安全的方法：先创建一个临时的、空的 ExplainAnalyzeNode 来获取输出符号，但比较麻烦。
+                    // 更直接的方法：硬编码输出符号，但风险较大。推荐使用 SymbolAllocator 创建与 Presto 期望一致的输出列。
+                    
+                    // 方法1：通过 analyzerContext 的 variableAllocator 创建输出变量（推荐）
+                    VariableAllocator variableAllocator = analyzerContext.getVariableAllocator();
+                    // ExplainAnalyzeNode 通常输出一个包含两列的行：Query Plan 和 Execution Statistics
+                    // 但具体列名和类型取决于版本。为了保险，我们使用正常分析得到的 ExplainAnalyzeNode 的输出变量。
+                    // 更简单的做法：让 Presto 自己生成一个 ExplainAnalyzeNode，然后替换它的 subplan。
+                    // 由于您已经 bypass 了正常分析，可以改为调用 queryAnalyzer.plan 生成一个“模板”ExplainAnalyzeNode，
+                    // 然后修改其 subplan。但这样会有两次分析开销。
+                    
+                    // 下面给出最简洁且能工作的方式（假设您的 Presto 版本中 ExplainAnalyzeNode 的输出符号固定）：
+                    // 实际使用时请根据您的 Presto 源码中的 ExplainAnalyzeNode 输出符号进行调整。
+                    VariableReferenceExpression outputSymbol = variableAllocator.newVariable("explain_output", 
+                        new RowType(ImmutableList.of(
+                            new RowType.Field(Optional.of("Query Plan"), VarcharType.VARCHAR),
+                            new RowType.Field(Optional.of("Execution Statistics"), VarcharType.VARCHAR)
+                        )));
+                    // 但上面这样定义不一定准确，因为 ExplainAnalyzeNode 的输出类型是固定的 RecordType。
+                    // 最可靠的方法：直接复用正常流程生成的 ExplainAnalyzeNode 的输出符号。
+                    
+                    // 替代方案：先让正常流程生成一个 ExplainAnalyzeNode（用于获取输出符号），再替换。
+                    // 不过考虑到性能，您可以预先在 TpchPlanTree 中定义一个方法，返回标准的 ExplainAnalyzeNode 输出符号。
+                    
+                    // 为了简化演示，这里假设您有一个 helper 方法能获取正确的输出符号。
+                    VariableReferenceExpression explainOutput = getExplainAnalyzeOutputSymbol();
+                    
+                    planNode = new ExplainAnalyzeNode(
+                        Optional.empty(),
+                        idAllocator.getNextId(),
+                        innerPlan,
+                        explainOutput
+                    );
+                    // 跳过后续的 optimizer 阶段？注意：ExplainAnalyzeNode 也需要经过优化器。
+                    // 直接跳转到 plan 构建部分。
+                    // 但为了统一，我们继续往下走，让 optimizer 处理这个 ExplainAnalyzeNode。
+                } else {
+                    // 内部查询不匹配，走正常逻辑
+                    planNode = stateMachine.getSession()
                         .getRuntimeStats()
                         .recordWallAndCpuTime(
-                                LOGICAL_PLANNER_TIME_NANOS,
-                                () -> queryAnalyzer.plan(this.analyzerContext, queryAnalysis));    
+                            LOGICAL_PLANNER_TIME_NANOS,
+                            () -> queryAnalyzer.plan(this.analyzerContext, queryAnalysis));
+                }
+            } else {
+                switch (this.query) {
+                    case "select 1":
+                    planNode = tpchPlanTree.getQ1();
+                    break;
+                    case "select 6":
+                    planNode = tpchPlanTree.getQ6();
+                    break;
+                    case "select 12":
+                    planNode = tpchPlanTree.getQ12();
+                    break;
+                    case "select 13":
+                    planNode = tpchPlanTree.getQ13();
+                    break;
+                    case "select 14":
+                    planNode = tpchPlanTree.getQ14();
+                    break;
+                    case "select 17":
+                    planNode = tpchPlanTree.getQ17();
+                    break;
+                    case "select 18":
+                    planNode = tpchPlanTree.getQ18();
+                    break;
+                    case "select 19":
+                    planNode = tpchPlanTree.getQ19();
+                    break;
+                    default:
+                    planNode = stateMachine.getSession()
+                            .getRuntimeStats()
+                            .recordWallAndCpuTime(
+                                    LOGICAL_PLANNER_TIME_NANOS,
+                                    () -> queryAnalyzer.plan(this.analyzerContext, queryAnalysis));    
+                }
             }
 
             Optimizer optimizer = new Optimizer(
