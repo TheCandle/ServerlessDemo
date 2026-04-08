@@ -16,7 +16,7 @@ ARG BASE_IMAGE=quay.io/centos/centos:stream9
 FROM ${DEPENDENCY_IMAGE} as prestissimo-image
 
 ARG OSNAME=centos
-ARG BUILD_TYPE=Release
+ARG BUILD_TYPE=Debug
 ARG EXTRA_CMAKE_FLAGS=''
 ARG NUM_THREADS=8
 ARG CUDA_ARCHITECTURES=70
@@ -55,6 +55,18 @@ ENV LD_LIBRARY_PATH=$JAVA_HOME/jre/lib/amd64/server:$LD_LIBRARY_PATH
 
 COPY --from=watchdog /fwatchdog /usr/bin/fwatchdog
 RUN chmod +x /usr/bin/fwatchdog
+
+RUN yum install -y perf perl
+
+# 安装 Java 8 和 which（用于后续查找命令）
+RUN yum install -y java-1.8.0-openjdk-devel which && \
+    yum clean all
+
+# 设置 JAVA_HOME 环境变量
+ENV JAVA_HOME=/usr/lib/jvm/java-1.8.0-openjdk
+
+# 将 JAVA_HOME/bin 添加到 PATH（可选，但推荐）
+ENV PATH=$JAVA_HOME/bin:$PATH
 
 ENV BUILD_BASE_DIR=_build
 ENV BUILD_DIR=""
