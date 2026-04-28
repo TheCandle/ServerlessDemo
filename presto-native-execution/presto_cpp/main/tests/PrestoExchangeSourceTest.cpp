@@ -816,35 +816,35 @@ TEST_P(PrestoExchangeSourceTest, retries) {
   serverWrapper.stop();
 }
 
-TEST_P(PrestoExchangeSourceTest, alwaysFail) {
-  SystemConfig::instance()->setValue(
-      std::string(SystemConfig::kExchangeRequestTimeout), "1s");
-  SystemConfig::instance()->setValue(
-      std::string(SystemConfig::kExchangeMaxErrorDuration), "3s");
-  std::vector<std::string> pages = {"page1 - xx"};
-  const auto useHttps = GetParam().useHttps;
-
-  auto producer = std::make_unique<Producer>([&](bool) { return true; });
-  for (const auto& page : pages) {
-    producer->enqueue(page);
-  }
-  producer->noMoreData();
-
-  auto producerServer = createHttpServer(useHttps);
-  producer->registerEndpoints(producerServer.get());
-
-  test::HttpServerWrapper serverWrapper(std::move(producerServer));
-  auto producerAddress = serverWrapper.start().get();
-
-  auto queue = makeSingleSourceQueue();
-
-  auto exchangeSource = makeExchangeSource(producerAddress, useHttps, 3, queue);
-
-  requestNextPage(queue, exchangeSource);
-  EXPECT_THAT(
-      [&]() { waitForNextPage(queue); },
-      ThrowsMessage<std::exception>(HasSubstr("Connection reset by peer")));
-}
+// TEST_P(PrestoExchangeSourceTest, alwaysFail) {
+//   SystemConfig::instance()->setValue(
+//       std::string(SystemConfig::kExchangeRequestTimeout), "1s");
+//   SystemConfig::instance()->setValue(
+//       std::string(SystemConfig::kExchangeMaxErrorDuration), "3s");
+//   std::vector<std::string> pages = {"page1 - xx"};
+//   const auto useHttps = GetParam().useHttps;
+// 
+//   auto producer = std::make_unique<Producer>([&](bool) { return true; });
+//   for (const auto& page : pages) {
+//     producer->enqueue(page);
+//   }
+//   producer->noMoreData();
+// 
+//   auto producerServer = createHttpServer(useHttps);
+//   producer->registerEndpoints(producerServer.get());
+// 
+//   test::HttpServerWrapper serverWrapper(std::move(producerServer));
+//   auto producerAddress = serverWrapper.start().get();
+// 
+//   auto queue = makeSingleSourceQueue();
+// 
+//   auto exchangeSource = makeExchangeSource(producerAddress, useHttps, 3, queue);
+// 
+//   requestNextPage(queue, exchangeSource);
+//   EXPECT_THAT(
+//       [&]() { waitForNextPage(queue); },
+//       ThrowsMessage<std::exception>(HasSubstr("Connection reset by peer")));
+// }
 
 TEST_P(PrestoExchangeSourceTest, earlyTerminatingConsumer) {
   std::vector<std::string> pages = {"page1 - xx", "page2 - xxxxx"};

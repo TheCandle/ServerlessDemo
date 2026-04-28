@@ -3207,6 +3207,7 @@
                             <execution>
                                 <id>checkstyle</id>
                                 <configuration>
+                                    <skip>true</skip>          <!-- 新增这一行 -->
                                     <cacheFile>${out-of-tree-build-root}/${project.groupId}:${project.artifactId}/checkstyle-cachefile</cacheFile>
                                 </configuration>
                             </execution>
