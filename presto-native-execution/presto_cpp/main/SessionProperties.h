@@ -277,6 +277,9 @@ class SessionProperties {
   static constexpr const char* kMaxLocalExchangePartitionCount =
       "native_max_local_exchange_partition_count";
 
+  /// Per-stage override for max drivers in the form 'stageId:dop[,stageId:dop]'.
+  static constexpr const char* kStageMaxDrivers = "native_stage_max_drivers";
+
   /// Enable the prefix sort or fallback to std::sort in spill. The prefix sort
   /// is faster than std::sort but requires the memory to build normalized
   /// prefix keys, which might have potential risk of running out of server

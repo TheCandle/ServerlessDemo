@@ -18,8 +18,11 @@
 
 #include <boost/uuid/uuid.hpp>
 #include <boost/uuid/uuid_generators.hpp>
+#include <folly/String.h>
 #include <folly/container/F14Set.h>
 #include <velox/core/PlanNode.h>
+#include "presto_cpp/main/PrestoToVeloxQueryConfig.h"
+#include "presto_cpp/main/SessionProperties.h"
 #include "presto_cpp/main/common/Configs.h"
 #include "presto_cpp/main/common/Counters.h"
 #include "presto_cpp/main/common/Utils.h"
@@ -136,6 +139,65 @@ std::unique_ptr<Result> createCompleteResult(long token) {
   result->data = folly::IOBuf::create(0);
   result->complete = true;
   return result;
+}
+
+std::optional<uint32_t> getStageMaxDriversOverride(
+    const core::QueryConfig& queryConfig,
+    int32_t stageId) {
+  const auto stageMaxDriversConfig =
+      queryConfig.get<std::string>(kNativeStageMaxDriversConfig, "");
+  if (stageMaxDriversConfig.empty()) {
+    return std::nullopt;
+  }
+
+  std::vector<std::string> overrides;
+  folly::split(',', stageMaxDriversConfig, overrides, true);
+  std::optional<uint32_t> maxDriversOverride;
+
+  for (const auto& overrideEntry : overrides) {
+    const auto trimmedEntry = folly::trimWhitespace(overrideEntry).str();
+    VELOX_USER_CHECK(
+        !trimmedEntry.empty(),
+        "Invalid {} config '{}': empty stage override entry",
+        SessionProperties::kStageMaxDrivers,
+        stageMaxDriversConfig);
+
+    std::vector<std::string> parts;
+    folly::split(':', trimmedEntry, parts, true);
+    VELOX_USER_CHECK_EQ(
+        parts.size(),
+        2,
+        "Invalid {} config '{}': expected stageId:dop entries",
+        SessionProperties::kStageMaxDrivers,
+        stageMaxDriversConfig);
+
+    const auto stageIdValue = folly::to<int32_t>(folly::trimWhitespace(parts[0]));
+    const auto dopValue = folly::to<int32_t>(folly::trimWhitespace(parts[1]));
+    VELOX_USER_CHECK_GE(
+        stageIdValue,
+        0,
+        "Invalid {} config '{}': stageId must be >= 0",
+        SessionProperties::kStageMaxDrivers,
+        stageMaxDriversConfig);
+    VELOX_USER_CHECK_GT(
+        dopValue,
+        0,
+        "Invalid {} config '{}': dop must be > 0",
+        SessionProperties::kStageMaxDrivers,
+        stageMaxDriversConfig);
+
+    if (stageIdValue == stageId) {
+      VELOX_USER_CHECK(
+          !maxDriversOverride.has_value(),
+          "Invalid {} config '{}': duplicate stageId {}",
+          SessionProperties::kStageMaxDrivers,
+          stageMaxDriversConfig,
+          stageId);
+      maxDriversOverride = static_cast<uint32_t>(dopValue);
+    }
+  }
+
+  return maxDriversOverride;
 }
 
 void getData(
@@ -762,8 +824,12 @@ void TaskManager::startTaskLocked(std::shared_ptr<PrestoTask>& prestoTask) {
 
   getQueryContextManager()->setQueryHasStartedTasks(prestoTask->info.taskId);
 
-  const uint32_t maxDrivers = execTask->queryCtx()->queryConfig().get<int32_t>(
+  uint32_t maxDrivers = execTask->queryCtx()->queryConfig().get<int32_t>(
       kMaxDriversPerTask.data(), SystemConfig::instance()->maxDriversPerTask());
+  if (const auto maxDriversOverride = getStageMaxDriversOverride(
+          execTask->queryCtx()->queryConfig(), prestoTask->id.stageId())) {
+    maxDrivers = *maxDriversOverride;
+  }
   uint32_t concurrentLifespans =
       execTask->queryCtx()->queryConfig().get<int32_t>(
           kConcurrentLifespansPerTask.data(),

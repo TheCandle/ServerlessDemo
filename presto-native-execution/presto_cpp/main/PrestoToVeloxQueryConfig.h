@@ -25,6 +25,9 @@ class QueryConfig;
 
 namespace facebook::presto {
 
+inline constexpr const char* kNativeStageMaxDriversConfig =
+    "native.stage-max-drivers";
+
 /// Translates Presto configs to Velox 'QueryConfig' config map. Presto query
 /// session properties take precedence over Presto system config properties.
 std::unordered_map<std::string, std::string> toVeloxConfigs(

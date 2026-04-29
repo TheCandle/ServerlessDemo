@@ -90,6 +90,7 @@ public class NativeWorkerSessionPropertyProvider
     public static final String NATIVE_USE_VELOX_GEOSPATIAL_JOIN = "native_use_velox_geospatial_join";
     public static final String NATIVE_AGGREGATION_COMPACTION_BYTES_THRESHOLD = "native_aggregation_compaction_bytes_threshold";
     public static final String NATIVE_AGGREGATION_COMPACTION_UNUSED_MEMORY_RATIO = "native_aggregation_compaction_unused_memory_ratio";
+    public static final String NATIVE_STAGE_MAX_DRIVERS = "native_stage_max_drivers";
 
     private final List<PropertyMetadata<?>> sessionProperties;
 
@@ -98,6 +99,11 @@ public class NativeWorkerSessionPropertyProvider
     {
         boolean nativeExecution = requireNonNull(featuresConfig, "featuresConfig is null").isNativeExecutionEnabled();
         sessionProperties = ImmutableList.of(
+                stringProperty(
+                NATIVE_STAGE_MAX_DRIVERS,
+                "Native Execution only. Per-stage override for max drivers in the form 'stageId:dop[,stageId:dop]'.",
+                "",
+                !nativeExecution),
                 booleanProperty(
                         NATIVE_SIMPLIFIED_EXPRESSION_EVALUATION_ENABLED,
                         "Native Execution only. Enable simplified path in expression evaluation",

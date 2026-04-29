@@ -13,6 +13,7 @@
  */
 #include <gtest/gtest.h>
 
+#include "presto_cpp/main/PrestoToVeloxQueryConfig.h"
 #include "presto_cpp/main/SessionProperties.h"
 #include "velox/core/QueryConfig.h"
 
@@ -92,6 +93,7 @@ TEST_F(SessionPropertiesTest, validateMapping) {
        core::QueryConfig::kDriverCpuTimeSliceLimitMs},
       {SessionProperties::kMaxLocalExchangePartitionCount,
        core::QueryConfig::kMaxLocalExchangePartitionCount},
+      {SessionProperties::kStageMaxDrivers, kNativeStageMaxDriversConfig},
       {SessionProperties::kSpillPrefixSortEnabled,
        core::QueryConfig::kSpillPrefixSortEnabled},
       {SessionProperties::kPrefixSortNormalizedKeyMaxBytes,

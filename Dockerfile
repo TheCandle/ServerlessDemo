@@ -1,6 +1,15 @@
 FROM eclipse-temurin:17-jdk-jammy
 # 安装 Python 3 并创建 python 软链接（presto launcher 默认调用 python）
-RUN apt-get update && apt-get install -y python3 \
+# RUN apt-get update && apt-get install -y python3 \
+#     && ln -s /usr/bin/python3 /usr/bin/python \
+#     && rm -rf /var/lib/apt/lists/*
+
+
+# 换源
+RUN sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list \
+    && sed -i 's/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list \
+    && apt-get update \
+    && apt-get install -y python3 \
     && ln -s /usr/bin/python3 /usr/bin/python \
     && rm -rf /var/lib/apt/lists/*
 

@@ -526,6 +526,17 @@ TEST_F(PrestoToVeloxQueryConfigTest, specialHardCodedPrestoConfigurations) {
   EXPECT_EQ(2000, veloxConfig9.driverCpuTimeSliceLimitMs());
 }
 
+TEST_F(PrestoToVeloxQueryConfigTest, stageMaxDriversConfiguration) {
+  auto session = createBasicSession();
+  session.systemProperties[SessionProperties::kStageMaxDrivers] = "1:4, 2:16";
+
+  auto veloxConfig = QueryConfig{toVeloxConfigs(session)};
+  auto raw = veloxConfig.rawConfigsCopy();
+
+  ASSERT_TRUE(raw.count(kNativeStageMaxDriversConfig));
+  EXPECT_EQ("1:4, 2:16", raw.at(kNativeStageMaxDriversConfig));
+}
+
 TEST_F(PrestoToVeloxQueryConfigTest, sessionAndExtraCredentialsOverload) {
   // --- Test 1: Basic session with empty extra credentials ---
   {

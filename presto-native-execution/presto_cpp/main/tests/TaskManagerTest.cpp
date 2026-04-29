@@ -17,6 +17,7 @@
 #include <gtest/gtest.h>
 #include "folly/experimental/EventCount.h"
 #include "presto_cpp/main/PrestoExchangeSource.h"
+#include "presto_cpp/main/SessionProperties.h"
 #include "presto_cpp/main/TaskResource.h"
 #include "presto_cpp/main/common/Exception.h"
 #include "presto_cpp/main/common/tests/MutableConfigs.h"
@@ -972,6 +973,73 @@ TEST_P(TaskManagerTest, queuedEmptyGroupedExecutionTask) {
   if (execTask) {
     ASSERT_EQ(execTask->state(), TaskState::kFinished);
   }
+}
+
+TEST_P(TaskManagerTest, stageMaxDriversOverride) {
+  SystemConfig::instance()->setValue(
+      std::string(SystemConfig::kMaxDriversPerTask), "4");
+
+  const auto tableDir = exec::test::TempDirectoryPath::create();
+  auto filePaths = makeFilePaths(tableDir, 5);
+  auto vectors = makeVectors(filePaths.size(), 100);
+  for (int i = 0; i < filePaths.size(); ++i) {
+    writeToFile(filePaths[i], vectors[i]);
+  }
+
+  const auto planFragment = exec::test::PlanBuilder()
+                                .tableScan(rowType_)
+                                .partitionedOutput({}, 1, {"c0", "c1"}, GetParam())
+                                .planFragment();
+
+  protocol::TaskUpdateRequest updateRequest;
+  updateRequest.session.systemProperties[SessionProperties::kStageMaxDrivers] =
+      "0:2,1:3";
+  long splitSequenceId{0};
+  updateRequest.sources.push_back(
+      makeSource("0", filePaths, true, splitSequenceId));
+
+  TaskIdGenerator taskIdGenerator("stage-dop");
+
+  const auto stage0TaskId = taskIdGenerator.makeTaskId(0, 0);
+  const auto stage1TaskId = taskIdGenerator.makeTaskId(1, 0);
+  const auto stage2TaskId = taskIdGenerator.makeTaskId(2, 0);
+
+  createOrUpdateTask(stage0TaskId, updateRequest, planFragment);
+  createOrUpdateTask(stage1TaskId, updateRequest, planFragment);
+  createOrUpdateTask(stage2TaskId, updateRequest, planFragment);
+
+  auto taskMap = taskManager_->tasks();
+  ASSERT_EQ(taskMap.size(), 3);
+  EXPECT_EQ(taskMap.at(stage0TaskId)->task->numTotalDrivers(), 2);
+  EXPECT_EQ(taskMap.at(stage1TaskId)->task->numTotalDrivers(), 3);
+  EXPECT_EQ(taskMap.at(stage2TaskId)->task->numTotalDrivers(), 4);
+
+  taskManager_->deleteTask(stage0TaskId, true, true);
+  taskManager_->deleteTask(stage1TaskId, true, true);
+  taskManager_->deleteTask(stage2TaskId, true, true);
+  waitForAllOldTasksToBeCleaned(taskManager_.get(), 3'000'000);
+}
+
+TEST_P(TaskManagerTest, invalidStageMaxDriversConfigFailsFast) {
+  const auto tableDir = exec::test::TempDirectoryPath::create();
+  auto filePaths = makeFilePaths(tableDir, 1);
+  writeToFile(filePaths[0], makeVectors(1, 10)[0]);
+
+  const auto planFragment = exec::test::PlanBuilder()
+                                .tableScan(rowType_)
+                                .partitionedOutput({}, 1, {"c0", "c1"}, GetParam())
+                                .planFragment();
+
+  protocol::TaskUpdateRequest updateRequest;
+  updateRequest.session.systemProperties[SessionProperties::kStageMaxDrivers] =
+      "0:2,0:3";
+  long splitSequenceId{0};
+  updateRequest.sources.push_back(
+      makeSource("0", filePaths, true, splitSequenceId));
+
+  VELOX_ASSERT_THROW(
+      createOrUpdateTask("invalid-stage-dop.0.0.0.0", updateRequest, planFragment),
+      "duplicate stageId");
 }
 
 // Runs "select * from t where c0 % 5 = 1" query.
