@@ -2653,6 +2653,13 @@ void to_json(json& j, const TaskUpdateRequest& p) {
       "TaskUpdateRequest",
       "TableWriteInfo",
       "tableWriteInfo");
+  to_json_key(
+      j,
+      "nativePipelineMaxDrivers",
+      p.nativePipelineMaxDrivers,
+      "TaskUpdateRequest",
+      "String",
+      "nativePipelineMaxDrivers");
 }
 
 void from_json(const json& j, TaskUpdateRequest& p) {
@@ -2693,6 +2700,13 @@ void from_json(const json& j, TaskUpdateRequest& p) {
       "TaskUpdateRequest",
       "TableWriteInfo",
       "tableWriteInfo");
+  from_json_key(
+      j,
+      "nativePipelineMaxDrivers",
+      p.nativePipelineMaxDrivers,
+      "TaskUpdateRequest",
+      "String",
+      "nativePipelineMaxDrivers");
 }
 } // namespace facebook::presto::protocol
 namespace facebook::presto::protocol {

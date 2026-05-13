@@ -799,6 +799,7 @@ struct TaskUpdateRequest {
   List<TaskSource> sources = {};
   OutputBuffers outputIds = {};
   std::shared_ptr<TableWriteInfo> tableWriteInfo = {};
+  std::shared_ptr<String> nativePipelineMaxDrivers = {};
 };
 void to_json(json& j, const TaskUpdateRequest& p);
 void from_json(const json& j, TaskUpdateRequest& p);

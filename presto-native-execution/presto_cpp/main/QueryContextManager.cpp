@@ -106,11 +106,16 @@ QueryContextManager::findOrCreateQueryCtx(
     const protocol::TaskId& taskId,
     const protocol::TaskUpdateRequest& taskUpdateRequest) {
   std::lock_guard<std::mutex> lock(queryContextCacheMutex_);
+  auto queryConfig = toVeloxConfigs(
+      taskUpdateRequest.session, taskUpdateRequest.extraCredentials);
+  if (taskUpdateRequest.nativePipelineMaxDrivers.has_value() &&
+      !taskUpdateRequest.nativePipelineMaxDrivers->empty()) {
+    queryConfig.values().insert_or_assign(
+        velox::core::QueryConfig::kNativePipelineMaxDrivers,
+        *taskUpdateRequest.nativePipelineMaxDrivers);
+  }
   return findOrCreateQueryCtxLocked(
-      taskId,
-      toVeloxConfigs(
-          taskUpdateRequest.session, taskUpdateRequest.extraCredentials),
-      toConnectorConfigs(taskUpdateRequest));
+      taskId, std::move(queryConfig), toConnectorConfigs(taskUpdateRequest));
 }
 
 std::shared_ptr<velox::core::QueryCtx>
@@ -118,11 +123,17 @@ QueryContextManager::findOrCreateBatchQueryCtx(
     const protocol::TaskId& taskId,
     const protocol::TaskUpdateRequest& taskUpdateRequest) {
   std::lock_guard<std::mutex> lock(queryContextCacheMutex_);
+  auto queryConfig = toVeloxConfigs(
+      taskUpdateRequest.session, taskUpdateRequest.extraCredentials);
+  if (taskUpdateRequest.nativePipelineMaxDrivers.has_value() &&
+      !taskUpdateRequest.nativePipelineMaxDrivers->empty()) {
+    queryConfig.values().insert_or_assign(
+        velox::core::QueryConfig::kNativePipelineMaxDrivers,
+        *taskUpdateRequest.nativePipelineMaxDrivers);
+  }
+
   auto queryCtx = findOrCreateQueryCtxLocked(
-      taskId,
-      toVeloxConfigs(
-          taskUpdateRequest.session, taskUpdateRequest.extraCredentials),
-      toConnectorConfigs(taskUpdateRequest));
+      taskId, std::move(queryConfig), toConnectorConfigs(taskUpdateRequest));
   if (queryCtx->pool()->aborted()) {
     // In Batch mode, only one query is running at a time. When tasks fail
     // during memory arbitration, the query memory pool will be set
@@ -134,10 +145,17 @@ QueryContextManager::findOrCreateBatchQueryCtx(
     // continue execution.
     VELOX_CHECK_EQ(queryContextCache_.size(), 1);
     queryContextCache_.clear();
+    auto retryQueryConfig = toVeloxConfigs(
+        taskUpdateRequest.session, taskUpdateRequest.extraCredentials);
+    if (taskUpdateRequest.nativePipelineMaxDrivers.has_value() &&
+        !taskUpdateRequest.nativePipelineMaxDrivers->empty()) {
+      retryQueryConfig.values().insert_or_assign(
+          velox::core::QueryConfig::kNativePipelineMaxDrivers,
+          *taskUpdateRequest.nativePipelineMaxDrivers);
+    }
     queryCtx = findOrCreateQueryCtxLocked(
         taskId,
-        toVeloxConfigs(
-            taskUpdateRequest.session, taskUpdateRequest.extraCredentials),
+        std::move(retryQueryConfig),
         toConnectorConfigs(taskUpdateRequest));
   }
   return queryCtx;
