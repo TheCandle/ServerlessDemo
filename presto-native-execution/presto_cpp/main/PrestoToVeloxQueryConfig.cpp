@@ -49,6 +49,21 @@ void updateFromSessionConfigs(
   auto* sessionProperties = SessionProperties::instance();
   std::optional<std::string> traceFragmentId;
   std::optional<std::string> traceShardId;
+
+  const auto nativePipelineDriverScheduleIt =
+      session.systemProperties.find("native_pipeline_driver_schedule");
+  if (nativePipelineDriverScheduleIt == session.systemProperties.end()) {
+    LOG(INFO) << "session.systemProperties does not contain "
+              << "native_pipeline_driver_schedule";
+    VLOG(1) << "session.systemProperties does not contain "
+              << "native_pipeline_driver_schedule";
+  } else {
+    LOG(INFO) << "session.systemProperties native_pipeline_driver_schedule='"
+              << nativePipelineDriverScheduleIt->second << "'";
+    VLOG(1) << "session.systemProperties native_pipeline_driver_schedule='"
+            << nativePipelineDriverScheduleIt->second << "'";
+  }
+
   for (const auto& it : session.systemProperties) {
     if (it.first == SessionProperties::kQueryTraceFragmentId) {
       traceFragmentId = it.second;

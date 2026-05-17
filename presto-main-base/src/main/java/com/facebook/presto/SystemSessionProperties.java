@@ -379,6 +379,7 @@ public final class SystemSessionProperties
     public static final String NATIVE_MIN_COLUMNAR_ENCODING_CHANNELS_TO_PREFER_ROW_WISE_ENCODING = "native_min_columnar_encoding_channels_to_prefer_row_wise_encoding";
     public static final String NATIVE_ENFORCE_JOIN_BUILD_INPUT_PARTITION = "native_enforce_join_build_input_partition";
     public static final String NATIVE_EXECUTION_SCALE_WRITER_THREADS_ENABLED = "native_execution_scale_writer_threads_enabled";
+    public static final String NATIVE_PIPELINE_DRIVER_SCHEDULE = "native_pipeline_driver_schedule";
 
     private final List<PropertyMetadata<?>> sessionProperties;
 
@@ -1694,6 +1695,11 @@ public final class SystemSessionProperties
                         NATIVE_MAX_SPLIT_PRELOAD_PER_DRIVER,
                         "Native Execution only. Maximum number of splits to preload per driver. Set to 0 to disable preloading.",
                         0,
+                        false),
+                stringProperty(
+                        NATIVE_PIPELINE_DRIVER_SCHEDULE,
+                        "Native Execution only. Per-stage pipeline DOP override in the form 'stageId:pipelineId:dop[,stageId:pipelineId:dop]'.",
+                        "",
                         false),
                 booleanProperty(
                         NATIVE_EXECUTION_ENABLED,

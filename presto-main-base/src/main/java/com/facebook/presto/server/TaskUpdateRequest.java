@@ -43,6 +43,8 @@ public class TaskUpdateRequest
     private final List<TaskSource> sources;
     private final OutputBuffers outputIds;
     private final Optional<TableWriteInfo> tableWriteInfo;
+    private final Optional<String> nativePipelineMaxDrivers;
+    private final Optional<String> nativePipelineDriverSchedule;
 
     @ThriftConstructor
     @JsonCreator
@@ -52,7 +54,9 @@ public class TaskUpdateRequest
             @JsonProperty("fragment") Optional<byte[]> fragment,
             @JsonProperty("sources") List<TaskSource> sources,
             @JsonProperty("outputIds") OutputBuffers outputIds,
-            @JsonProperty("tableWriteInfo") Optional<TableWriteInfo> tableWriteInfo)
+            @JsonProperty("tableWriteInfo") Optional<TableWriteInfo> tableWriteInfo,
+            @JsonProperty("nativePipelineMaxDrivers") Optional<String> nativePipelineMaxDrivers,
+            @JsonProperty("nativePipelineDriverSchedule") Optional<String> nativePipelineDriverSchedule)
     {
         requireNonNull(session, "session is null");
         requireNonNull(extraCredentials, "credentials is null");
@@ -60,6 +64,8 @@ public class TaskUpdateRequest
         requireNonNull(sources, "sources is null");
         requireNonNull(outputIds, "outputIds is null");
         requireNonNull(tableWriteInfo, "tableWriteInfo is null");
+        requireNonNull(nativePipelineMaxDrivers, "nativePipelineMaxDrivers is null");
+        requireNonNull(nativePipelineDriverSchedule, "nativePipelineDriverSchedule is null");
 
         this.session = session;
         this.extraCredentials = extraCredentials;
@@ -67,6 +73,27 @@ public class TaskUpdateRequest
         this.sources = ImmutableList.copyOf(sources);
         this.outputIds = outputIds;
         this.tableWriteInfo = tableWriteInfo;
+        this.nativePipelineMaxDrivers = nativePipelineMaxDrivers;
+        this.nativePipelineDriverSchedule = nativePipelineDriverSchedule;
+    }
+
+    public TaskUpdateRequest(
+            SessionRepresentation session,
+            Map<String, String> extraCredentials,
+            Optional<byte[]> fragment,
+            List<TaskSource> sources,
+            OutputBuffers outputIds,
+            Optional<TableWriteInfo> tableWriteInfo)
+    {
+        this(
+                session,
+                extraCredentials,
+                fragment,
+                sources,
+                outputIds,
+                tableWriteInfo,
+                Optional.empty(),
+                Optional.empty());
     }
 
     @JsonProperty
@@ -110,6 +137,22 @@ public class TaskUpdateRequest
     public Optional<TableWriteInfo> getTableWriteInfo()
     {
         return tableWriteInfo;
+    }
+
+    @JsonInclude(NON_ABSENT)
+    @JsonProperty
+    @ThriftField(7)
+    public Optional<String> getNativePipelineMaxDrivers()
+    {
+        return nativePipelineMaxDrivers;
+    }
+
+    @JsonInclude(NON_ABSENT)
+    @JsonProperty
+    @ThriftField(8)
+    public Optional<String> getNativePipelineDriverSchedule()
+    {
+        return nativePipelineDriverSchedule;
     }
 
     @Override

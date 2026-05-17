@@ -2660,6 +2660,13 @@ void to_json(json& j, const TaskUpdateRequest& p) {
       "TaskUpdateRequest",
       "String",
       "nativePipelineMaxDrivers");
+  to_json_key(
+      j,
+      "nativePipelineDriverSchedule",
+      p.nativePipelineDriverSchedule,
+      "TaskUpdateRequest",
+      "String",
+      "nativePipelineDriverSchedule");
 }
 
 void from_json(const json& j, TaskUpdateRequest& p) {
@@ -2707,6 +2714,13 @@ void from_json(const json& j, TaskUpdateRequest& p) {
       "TaskUpdateRequest",
       "String",
       "nativePipelineMaxDrivers");
+  from_json_key(
+      j,
+      "nativePipelineDriverSchedule",
+      p.nativePipelineDriverSchedule,
+      "TaskUpdateRequest",
+      "String",
+      "nativePipelineDriverSchedule");
 }
 } // namespace facebook::presto::protocol
 namespace facebook::presto::protocol {

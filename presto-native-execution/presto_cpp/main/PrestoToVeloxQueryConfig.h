@@ -27,6 +27,10 @@ namespace facebook::presto {
 
 inline constexpr const char* kNativeStageMaxDriversConfig =
     "native.stage-max-drivers";
+inline constexpr const char* kNativePipelineMaxDriversConfig =
+    "native.pipeline-max-drivers";
+inline constexpr const char* kNativePipelineDriverScheduleConfig =
+    "native.pipeline-driver-schedule";
 
 /// Translates Presto configs to Velox 'QueryConfig' config map. Presto query
 /// session properties take precedence over Presto system config properties.

@@ -18,6 +18,8 @@ import com.facebook.airlift.log.Logger;
 import com.facebook.airlift.units.DataSize;
 import com.facebook.airlift.units.Duration;
 import com.facebook.presto.Session;
+import com.facebook.presto.SystemSessionProperties;
+import com.facebook.presto.SystemSessionProperties;
 import com.facebook.presto.execution.TaskId;
 import com.facebook.presto.execution.TaskInfo;
 import com.facebook.presto.execution.TaskSource;
@@ -217,13 +219,22 @@ public class PrestoSparkHttpTaskClient
     {
         Optional<byte[]> fragment = Optional.of(planFragment.bytesForTaskSerialization(planFragmentCodec));
         Optional<TableWriteInfo> writeInfo = Optional.of(tableWriteInfo);
+        Optional<String> nativePipelineDriverSchedule = Optional.ofNullable(
+                session.getSystemProperty(SystemSessionProperties.NATIVE_PIPELINE_DRIVER_SCHEDULE, String.class))
+                .map(String::trim)
+                .filter(value -> !value.isEmpty());
+        log.info("Native pipeline schedule updateTask taskId=%s schedule=%s",
+                taskId,
+                nativePipelineDriverSchedule.orElse("<empty>"));
         TaskUpdateRequest updateRequest = new TaskUpdateRequest(
                 session.toSessionRepresentation(),
                 session.getIdentity().getExtraCredentials(),
                 fragment,
                 sources,
                 outputBuffers,
-                writeInfo);
+                writeInfo,
+                Optional.empty(),
+                nativePipelineDriverSchedule);
         BatchTaskUpdateRequest batchTaskUpdateRequest = new BatchTaskUpdateRequest(updateRequest, shuffleWriteInfo, broadcastBasePath);
 
         HttpUrl url = HttpUrl.get(getTaskUri(taskId)).newBuilder()

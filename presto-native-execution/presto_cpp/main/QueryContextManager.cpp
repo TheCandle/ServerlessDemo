@@ -106,14 +106,25 @@ QueryContextManager::findOrCreateQueryCtx(
     const protocol::TaskId& taskId,
     const protocol::TaskUpdateRequest& taskUpdateRequest) {
   std::lock_guard<std::mutex> lock(queryContextCacheMutex_);
-  auto queryConfig = toVeloxConfigs(
-      taskUpdateRequest.session, taskUpdateRequest.extraCredentials);
-  if (taskUpdateRequest.nativePipelineMaxDrivers.has_value() &&
+  auto queryConfigMap = toVeloxConfigs(taskUpdateRequest.session);
+  if (taskUpdateRequest.nativePipelineMaxDrivers &&
       !taskUpdateRequest.nativePipelineMaxDrivers->empty()) {
-    queryConfig.values().insert_or_assign(
-        velox::core::QueryConfig::kNativePipelineMaxDrivers,
-        *taskUpdateRequest.nativePipelineMaxDrivers);
+    queryConfigMap[kNativePipelineMaxDriversConfig] =
+        *taskUpdateRequest.nativePipelineMaxDrivers;
   }
+  if (taskUpdateRequest.nativePipelineDriverSchedule &&
+      !taskUpdateRequest.nativePipelineDriverSchedule->empty()) {
+    LOG(INFO) << "Applying nativePipelineDriverSchedule for task " << taskId
+              << ": " << *taskUpdateRequest.nativePipelineDriverSchedule;
+    queryConfigMap[kNativePipelineDriverScheduleConfig] =
+        *taskUpdateRequest.nativePipelineDriverSchedule;
+  } else {
+    LOG(INFO) << "No nativePipelineDriverSchedule for task " << taskId;
+  }
+  queryConfigMap.insert(
+      taskUpdateRequest.extraCredentials.begin(),
+      taskUpdateRequest.extraCredentials.end());
+  auto queryConfig = velox::core::QueryConfig(std::move(queryConfigMap));
   return findOrCreateQueryCtxLocked(
       taskId, std::move(queryConfig), toConnectorConfigs(taskUpdateRequest));
 }
@@ -123,14 +134,16 @@ QueryContextManager::findOrCreateBatchQueryCtx(
     const protocol::TaskId& taskId,
     const protocol::TaskUpdateRequest& taskUpdateRequest) {
   std::lock_guard<std::mutex> lock(queryContextCacheMutex_);
-  auto queryConfig = toVeloxConfigs(
-      taskUpdateRequest.session, taskUpdateRequest.extraCredentials);
-  if (taskUpdateRequest.nativePipelineMaxDrivers.has_value() &&
+  auto queryConfigMap = toVeloxConfigs(taskUpdateRequest.session);
+  if (taskUpdateRequest.nativePipelineMaxDrivers &&
       !taskUpdateRequest.nativePipelineMaxDrivers->empty()) {
-    queryConfig.values().insert_or_assign(
-        velox::core::QueryConfig::kNativePipelineMaxDrivers,
-        *taskUpdateRequest.nativePipelineMaxDrivers);
+    queryConfigMap[kNativeStageMaxDriversConfig] =
+        *taskUpdateRequest.nativePipelineMaxDrivers;
   }
+  queryConfigMap.insert(
+      taskUpdateRequest.extraCredentials.begin(),
+      taskUpdateRequest.extraCredentials.end());
+  auto queryConfig = velox::core::QueryConfig(std::move(queryConfigMap));
 
   auto queryCtx = findOrCreateQueryCtxLocked(
       taskId, std::move(queryConfig), toConnectorConfigs(taskUpdateRequest));
@@ -145,14 +158,17 @@ QueryContextManager::findOrCreateBatchQueryCtx(
     // continue execution.
     VELOX_CHECK_EQ(queryContextCache_.size(), 1);
     queryContextCache_.clear();
-    auto retryQueryConfig = toVeloxConfigs(
-        taskUpdateRequest.session, taskUpdateRequest.extraCredentials);
-    if (taskUpdateRequest.nativePipelineMaxDrivers.has_value() &&
+    auto retryQueryConfigMap = toVeloxConfigs(taskUpdateRequest.session);
+    if (taskUpdateRequest.nativePipelineMaxDrivers &&
         !taskUpdateRequest.nativePipelineMaxDrivers->empty()) {
-      retryQueryConfig.values().insert_or_assign(
-          velox::core::QueryConfig::kNativePipelineMaxDrivers,
-          *taskUpdateRequest.nativePipelineMaxDrivers);
+      retryQueryConfigMap[kNativeStageMaxDriversConfig] =
+          *taskUpdateRequest.nativePipelineMaxDrivers;
     }
+    retryQueryConfigMap.insert(
+        taskUpdateRequest.extraCredentials.begin(),
+        taskUpdateRequest.extraCredentials.end());
+    auto retryQueryConfig =
+        velox::core::QueryConfig(std::move(retryQueryConfigMap));
     queryCtx = findOrCreateQueryCtxLocked(
         taskId,
         std::move(retryQueryConfig),

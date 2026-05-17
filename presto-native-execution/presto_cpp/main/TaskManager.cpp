@@ -200,6 +200,88 @@ std::optional<uint32_t> getStageMaxDriversOverride(
   return maxDriversOverride;
 }
 
+std::unordered_map<int32_t, uint32_t> getPipelineMaxDriversOverridesForStage(
+    const core::QueryConfig& queryConfig,
+    int32_t stageId) {
+  const auto scheduleConfig =
+      queryConfig.get<std::string>(kNativePipelineDriverScheduleConfig, "");
+
+  LOG(INFO) << "nativePipelineDriverSchedule raw config for stage " << stageId
+            << ": '" << scheduleConfig << "'";
+
+  if (scheduleConfig.empty()) {
+    LOG(INFO) << "nativePipelineDriverSchedule is empty for stage " << stageId;
+    return {};
+  }
+
+  std::vector<std::string> entries;
+  folly::split(',', scheduleConfig, entries, true);
+  std::unordered_map<int32_t, uint32_t> pipelineOverrides;
+  folly::F14FastSet<std::string> seenStagePipelineKeys;
+  std::vector<std::string> matchedPipelines;
+
+  for (const auto& entry : entries) {
+    const auto trimmed = folly::trimWhitespace(entry).str();
+    if (trimmed.empty()) {
+      continue;
+    }
+    std::vector<std::string> parts;
+    folly::split(':', trimmed, parts, true);
+    VELOX_USER_CHECK_EQ(
+        parts.size(),
+        3,
+        "Invalid {} config '{}': expected stageId:pipelineId:dop entries",
+        "nativePipelineDriverSchedule",
+        scheduleConfig);
+
+    const auto stageIdValue = folly::to<int32_t>(folly::trimWhitespace(parts[0]));
+    const auto pipelineIdValue =
+        folly::to<int32_t>(folly::trimWhitespace(parts[1]));
+    const auto dopValue = folly::to<int32_t>(folly::trimWhitespace(parts[2]));
+    VELOX_USER_CHECK_GE(
+        stageIdValue,
+        0,
+        "Invalid {} config '{}': stageId must be >= 0",
+        "nativePipelineDriverSchedule",
+        scheduleConfig);
+    VELOX_USER_CHECK_GE(
+        pipelineIdValue,
+        0,
+        "Invalid {} config '{}': pipelineId must be >= 0",
+        "nativePipelineDriverSchedule",
+        scheduleConfig);
+    VELOX_USER_CHECK_GT(
+        dopValue,
+        0,
+        "Invalid {} config '{}': dop must be > 0",
+        "nativePipelineDriverSchedule",
+        scheduleConfig);
+
+    const auto stagePipelineKey =
+        fmt::format("{}:{}", stageIdValue, pipelineIdValue);
+    VELOX_USER_CHECK(
+        !seenStagePipelineKeys.contains(stagePipelineKey),
+        "Invalid {} config '{}': duplicate (stageId,pipelineId) {}",
+        "nativePipelineDriverSchedule",
+        scheduleConfig,
+        stagePipelineKey);
+    seenStagePipelineKeys.insert(stagePipelineKey);
+
+    if (stageIdValue == stageId) {
+      matchedPipelines.push_back(
+          fmt::format("{}:{}", pipelineIdValue, dopValue));
+      pipelineOverrides[pipelineIdValue] = static_cast<uint32_t>(dopValue);
+    }
+  }
+
+  if (!pipelineOverrides.empty()) {
+    LOG(INFO) << "Applying nativePipelineDriverSchedule for stage " << stageId
+              << ": [pipelineId:dop]=" << folly::join(",", matchedPipelines);
+  }
+
+  return pipelineOverrides;
+}
+
 void getData(
     PromiseHolderPtr<std::unique_ptr<Result>> promiseHolder,
     std::weak_ptr<http::CallbackRequestHandlerState> stateHolder,
@@ -826,9 +908,38 @@ void TaskManager::startTaskLocked(std::shared_ptr<PrestoTask>& prestoTask) {
 
   uint32_t maxDrivers = execTask->queryCtx()->queryConfig().get<int32_t>(
       kMaxDriversPerTask.data(), SystemConfig::instance()->maxDriversPerTask());
-  if (const auto maxDriversOverride = getStageMaxDriversOverride(
-          execTask->queryCtx()->queryConfig(), prestoTask->id.stageId())) {
-    maxDrivers = *maxDriversOverride;
+  auto pipelineMaxDrivers = getPipelineMaxDriversOverridesForStage(
+      execTask->queryCtx()->queryConfig(), prestoTask->id.stageId());
+  if (pipelineMaxDrivers.empty()) {
+    VLOG(1)  << "No pipeline DOP overrides matched stage "
+              << prestoTask->id.stageId() << " for task "
+              << prestoTask->info.taskId;
+  } else {
+    std::vector<std::string> overrides;
+    overrides.reserve(pipelineMaxDrivers.size());
+    for (const auto& [pipelineId, dop] : pipelineMaxDrivers) {
+      overrides.push_back(fmt::format("{}:{}", pipelineId, dop));
+    }
+    VLOG(1) << "Matched pipeline DOP overrides for task "
+              << prestoTask->info.taskId << " stage "
+              << prestoTask->id.stageId() << ": "
+              << folly::join(",", overrides);
+  }
+  if (pipelineMaxDrivers.empty()) {
+    if (const auto maxDriversOverride = getStageMaxDriversOverride(
+            execTask->queryCtx()->queryConfig(), prestoTask->id.stageId())) {
+      maxDrivers = *maxDriversOverride;
+    }
+  } else {
+    // If per-pipeline DOP is specified for this stage, make the task-level
+    // maxDrivers large enough so LocalPlanner can materialize the requested
+    // pipeline parallelism. The per-pipeline overrides themselves are applied
+    // later in Velox.
+    uint32_t maxPipelineDop = 1;
+    for (const auto& [_, pipelineDop] : pipelineMaxDrivers) {
+      maxPipelineDop = std::max(maxPipelineDop, pipelineDop);
+    }
+    maxDrivers = std::max(maxDrivers, maxPipelineDop);
   }
   uint32_t concurrentLifespans =
       execTask->queryCtx()->queryConfig().get<int32_t>(
@@ -848,7 +959,7 @@ void TaskManager::startTaskLocked(std::shared_ptr<PrestoTask>& prestoTask) {
     LOG(INFO) << "Starting task " << prestoTask->info.taskId << " with "
               << maxDrivers << " max drivers.";
   }
-  execTask->start(maxDrivers, concurrentLifespans);
+  execTask->start(maxDrivers, pipelineMaxDrivers, concurrentLifespans);
   prestoTask->taskStarted = true;
 
   // Record the time we spent between task creation and start, which is the

@@ -399,6 +399,15 @@ SessionProperties::SessionProperties() {
       "");
 
   addSessionProperty(
+      kPipelineDriverSchedule,
+      "Native Execution only. Per-stage and per-pipeline override for drivers "
+      "in the form 'stageId:pipelineId:dop[,stageId:pipelineId:dop]'.",
+      VARCHAR(),
+      false,
+      kNativePipelineDriverScheduleConfig,
+      "");
+
+  addSessionProperty(
       kSpillPrefixSortEnabled,
       "Enable the prefix sort or fallback to std::sort in spill. The prefix sort is "
       "faster than std::sort but requires the memory to build normalized prefix "

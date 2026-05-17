@@ -280,6 +280,11 @@ class SessionProperties {
   /// Per-stage override for max drivers in the form 'stageId:dop[,stageId:dop]'.
   static constexpr const char* kStageMaxDrivers = "native_stage_max_drivers";
 
+  /// Per-stage and per-pipeline override in the form
+  /// 'stageId:pipelineId:dop[,stageId:pipelineId:dop]'.
+  static constexpr const char* kPipelineDriverSchedule =
+      "native_pipeline_driver_schedule";
+
   /// Enable the prefix sort or fallback to std::sort in spill. The prefix sort
   /// is faster than std::sort but requires the memory to build normalized
   /// prefix keys, which might have potential risk of running out of server
