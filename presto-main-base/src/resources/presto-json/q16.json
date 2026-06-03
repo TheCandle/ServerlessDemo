@@ -1,0 +1,49 @@
+- Output[PlanNodeId 23][p_brand, p_type, p_size, supplier_cnt] => [p_brand:varchar(10), p_type:varchar(25), p_size:integer, count:bigint]
+        supplier_cnt := count (5:1)
+    - RemoteStreamingMerge[PlanNodeId 1107][count DESC_NULLS_LAST, p_brand ASC_NULLS_LAST, p_type ASC_NULLS_LAST, p_size ASC_NULLS_LAST] => [p_brand:varchar(10), p_type:varchar(25), p_size:integer, count:bigint]
+        - LocalMerge[PlanNodeId 1218][count DESC_NULLS_LAST, p_brand ASC_NULLS_LAST, p_type ASC_NULLS_LAST, p_size ASC_NULLS_LAST] => [p_brand:varchar(10), p_type:varchar(25), p_size:integer, count:bigint]
+            - PartialSort[PlanNodeId 1108][count DESC_NULLS_LAST, p_brand ASC_NULLS_LAST, p_type ASC_NULLS_LAST, p_size ASC_NULLS_LAST] => [p_brand:varchar(10), p_type:varchar(25), p_size:integer, count:bigint]
+                - RemoteStreamingExchange[PlanNodeId 1106][REPARTITION - COLUMNAR] => [p_brand:varchar(10), p_type:varchar(25), p_size:integer, count:bigint]
+                    - Aggregate(FINAL)[p_brand, p_type, p_size][PlanNodeId 16] => [p_brand:varchar(10), p_type:varchar(25), p_size:integer, count:bigint]
+                            count := "presto.default.count"((count_30)) (5:1)
+                        - LocalExchange[PlanNodeId 1249][HASH] (p_brand, p_type, p_size) => [p_brand:varchar(10), p_type:varchar(25), p_size:integer, count_30:bigint]
+                            - RemoteStreamingExchange[PlanNodeId 1255][REPARTITION - COLUMNAR] => [p_brand:varchar(10), p_type:varchar(25), p_size:integer, count_30:bigint]
+                                - Aggregate(PARTIAL)[p_brand, p_type, p_size][PlanNodeId 1253] => [p_brand:varchar(10), p_type:varchar(25), p_size:integer, count_30:bigint]
+                                        count_30 := "presto.default.count"((ps_suppkey)) (5:1)
+                                    - Aggregate(FINAL)[p_brand, p_type, p_size, ps_suppkey][PlanNodeId 162] => [p_brand:varchar(10), p_type:varchar(25), p_size:integer, ps_suppkey:bigint]
+                                        - LocalExchange[PlanNodeId 1265][HASH] (p_brand, p_type, p_size, ps_suppkey) => [p_brand:varchar(10), p_type:varchar(25), p_size:integer, ps_suppkey:bigint]
+                                            - Aggregate(PARTIAL)[p_brand, p_type, p_size, ps_suppkey][PlanNodeId 1263] => [p_brand:varchar(10), p_type:varchar(25), p_size:integer, ps_suppkey:bigint]
+                                                - FilterProject[PlanNodeId 535,14][filterPredicate = not(expr_7), projectLocality = LOCAL] => [p_brand:varchar(10), p_type:varchar(25), p_size:integer, ps_suppkey:bigint]
+                                                    - SemiJoin[PlanNodeId 372][ps_suppkey = s_suppkey] => [ps_suppkey:bigint, p_brand:varchar(10), p_type:varchar(25), p_size:integer, expr_7:boolean]
+                                                            Estimates: {source: CostBasedSourceInfo, rows: 110,592 (5.55MB), cpu: ?, memory: ?, network: ?}
+                                                            Distribution: PARTITIONED
+                                                        - RemoteStreamingExchange[PlanNodeId 1103][REPARTITION - COLUMNAR] => [ps_suppkey:bigint, p_brand:varchar(10), p_type:varchar(25), p_size:integer]
+                                                                Estimates: {source: CostBasedSourceInfo, rows: 110,592 (5.55MB), cpu: 80,236,942.69, memory: 1,454,277.34, network: 21,671,386.68}
+                                                            - InnerJoin[PlanNodeId 996][("ps_partkey" = "p_partkey")] => [ps_suppkey:bigint, p_brand:varchar(10), p_type:varchar(25), p_size:integer]
+                                                                    Estimates: {source: CostBasedSourceInfo, rows: 110,592 (5.55MB), cpu: 74,419,833.35, memory: 1,454,277.34, network: 15,854,277.34}
+                                                                    Distribution: PARTITIONED
+                                                                - RemoteStreamingExchange[PlanNodeId 1100][REPARTITION - COLUMNAR] => [ps_partkey:bigint, ps_suppkey:bigint]
+                                                                        Estimates: {source: CostBasedSourceInfo, rows: 800,000 (94.60MB), cpu: 28,800,000.00, memory: 0.00, network: 14,400,000.00}
+                                                                    - TableScan[PlanNodeId 0][TableHandle {connectorId='tpchstandard', connectorHandle='partsupp:sf1.0', layout='Optional[partsupp:sf1.0]'}] => [ps_partkey:bigint, ps_suppkey:bigint]
+                                                                            Estimates: {source: CostBasedSourceInfo, rows: 800,000 (94.60MB), cpu: 14,400,000.00, memory: 0.00, network: 0.00}
+                                                                            ps_suppkey := tpch:ps_suppkey (7:1)
+                                                                            ps_partkey := tpch:ps_partkey (7:1)
+                                                                - LocalExchange[PlanNodeId 1215][HASH] (p_partkey) => [p_partkey:bigint, p_brand:varchar(10), p_type:varchar(25), p_size:integer]
+                                                                        Estimates: {source: CostBasedSourceInfo, rows: 27,648 (1.39MB), cpu: 23,948,446.67, memory: 0.00, network: 1,454,277.34}
+                                                                    - RemoteStreamingExchange[PlanNodeId 1101][REPARTITION - COLUMNAR] => [p_partkey:bigint, p_brand:varchar(10), p_type:varchar(25), p_size:integer]
+                                                                            Estimates: {source: CostBasedSourceInfo, rows: 27,648 (1.39MB), cpu: 22,494,169.34, memory: 0.00, network: 1,454,277.34}
+                                                                        - ScanFilter[PlanNodeId 1,1099][table = TableHandle {connectorId='tpchstandard', connectorHandle='part:sf1.0', layout='Optional[part:sf1.0]'}, filterPredicate = (((p_brand) <> (VARCHAR'Brand#12')) AND (IN(p_size, INTEGER'1', INTEGER'7', INTEGER'8', INTEGER'12', INTEGER'14', INTEGER'39', INTEGER'42', INTEGER'43'))) AND ((SUBSTR(p_type, BIGINT'1', BIGINT'13')) <> (VARCHAR'LARGE BRUSHED'))] => [p_partkey:bigint, p_brand:varchar(10), p_type:varchar(25), p_size:integer]
+                                                                                Estimates: {source: CostBasedSourceInfo, rows: 200,000 (10.03MB), cpu: 10,519,946.00, memory: 0.00, network: 0.00}/{source: CostBasedSourceInfo, rows: 27,648 (1.39MB), cpu: 21,039,892.00, memory: 0.00, network: 0.00}
+                                                                                p_brand := tpch:p_brand (8:1)
+                                                                                p_type := tpch:p_type (8:1)
+                                                                                    :: [["ECONOMY ANODIZED BRASS", "STANDARD POLISHED TIN"]]
+                                                                                p_size := tpch:p_size (8:1)
+                                                                                p_partkey := tpch:p_partkey (8:1)
+                                                                                tpch:p_container
+                                                                                    :: [["JUMBO BAG", "WRAP PKG"]]
+                                                        - RemoteStreamingExchange[PlanNodeId 1104][REPARTITION - COLUMNAR - REPLICATE NULLS AND ANY] => [s_suppkey:bigint]
+                                                                Estimates: {source: CostBasedSourceInfo, rows: ? (?), cpu: ?, memory: 0.00, network: ?}
+                                                            - ScanFilterProject[PlanNodeId 4,1102,6][table = TableHandle {connectorId='tpchstandard', connectorHandle='supplier:sf1.0', layout='Optional[supplier:sf1.0]'}, filterPredicate = s_comment LIKE VARCHAR'%Customer%Complaints%', projectLocality = LOCAL] => [s_suppkey:bigint]
+                                                                    Estimates: {source: CostBasedSourceInfo, rows: 10,000 (1.18MB), cpu: 765,695.00, memory: 0.00, network: 0.00}/{source: CostBasedSourceInfo, rows: ? (?), cpu: 1,531,390.00, memory: 0.00, network: 0.00}/{source: CostBasedSourceInfo, rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}
+                                                                    s_comment := tpch:s_comment (18:1)
+                                                                    s_suppkey := tpch:s_suppkey (18:1)

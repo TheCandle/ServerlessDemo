@@ -1,0 +1,53 @@
+utput[PlanNodeId 15][l_orderkey, revenue, o_orderdate, o_shippriority] => [l_orderkey:bigint, sum:double, o_orderdate:date, o_shippriority:integer]
+        Estimates: {source: CostBasedSourceInfo, rows: 470,917 (12.57MB), cpu: 776,809,534.90, memory: 26,371,363.66, network: 51,485,648.18}
+        revenue := sum (3:1)
+    - RemoteStreamingMerge[PlanNodeId 962][sum DESC_NULLS_LAST, o_orderdate ASC_NULLS_LAST] => [l_orderkey:bigint, o_orderdate:date, o_shippriority:integer, sum:double]
+            Estimates: {source: CostBasedSourceInfo, rows: 470,917 (12.57MB), cpu: 776,809,534.90, memory: 26,371,363.66, network: 51,485,648.18}
+        - LocalMerge[PlanNodeId 1061][sum DESC_NULLS_LAST, o_orderdate ASC_NULLS_LAST] => [l_orderkey:bigint, o_orderdate:date, o_shippriority:integer, sum:double]
+                Estimates: {source: CostBasedSourceInfo, rows: 470,917 (12.57MB), cpu: 776,809,534.90, memory: 26,371,363.66, network: 38,299,966.35}
+            - PartialSort[PlanNodeId 963][sum DESC_NULLS_LAST, o_orderdate ASC_NULLS_LAST] => [l_orderkey:bigint, o_orderdate:date, o_shippriority:integer, sum:double]
+                    Estimates: {source: CostBasedSourceInfo, rows: 470,917 (12.57MB), cpu: 776,809,534.90, memory: 26,371,363.66, network: 38,299,966.35}
+                - RemoteStreamingExchange[PlanNodeId 961][REPARTITION - COLUMNAR] => [l_orderkey:bigint, o_orderdate:date, o_shippriority:integer, sum:double]
+                        Estimates: {source: CostBasedSourceInfo, rows: 470,917 (12.57MB), cpu: 763,623,853.07, memory: 17,387,970.51, network: 38,299,966.35}
+                    - Aggregate[l_orderkey, o_orderdate, o_shippriority][PlanNodeId 8] => [l_orderkey:bigint, o_orderdate:date, o_shippriority:integer, sum:double]
+                            Estimates: {source: CostBasedSourceInfo, rows: 470,917 (12.57MB), cpu: 750,438,171.24, memory: 17,387,970.51, network: 25,114,284.52}
+                            sum := "presto.default.sum"((expr)) (3:1)
+                        - Project[PlanNodeId 203][projectLocality = LOCAL] => [l_orderkey:bigint, o_orderdate:date, o_shippriority:integer, expr:double]
+                                Estimates: {source: CostBasedSourceInfo, rows: 470,917 (12.57MB), cpu: 737,252,489.41, memory: 4,472,288.67, network: 25,114,284.52}
+                                expr := (l_extendedprice) * ((DOUBLE'1.0') - (l_discount)) (9:2)
+                            - InnerJoin[PlanNodeId 853][("l_orderkey" = "o_orderkey")] => [l_orderkey:bigint, l_extendedprice:double, l_discount:double, o_orderdate:date, o_shippriority:integer]
+                                    Estimates: {source: CostBasedSourceInfo, rows: 470,917 (12.57MB), cpu: 724,066,807.58, memory: 4,472,288.67, network: 25,114,284.52}
+                                    Distribution: PARTITIONED
+                                - ScanFilterProject[PlanNodeId 3,955,389][table = TableHandle {connectorId='tpchstandard', connectorHandle='lineitem:sf1.0', layout='Optional[lineitem:sf1.0]'}, filterPredicate = (l_shipdate) > (DATE'1995-03-28'), projectLocality = LOCAL] => [l_orderkey:bigint, l_extendedprice:double, l_discount:double]
+                                        Estimates: {source: CostBasedSourceInfo, rows: 6,001,215 (160.25MB), cpu: 192,038,880.00, memory: 0.00, network: 0.00}/{source: CostBasedSourceInfo, rows: 3,194,310 (85.30MB), cpu: 384,077,760.00, memory: 0.00, network: 0.00}/{source: CostBasedSourceInfo, rows: 3,194,310 (85.30MB), cpu: 470,324,132.25, memory: 0.00, network: 0.00}
+                                        l_orderkey := tpch:l_orderkey (9:1)
+                                        l_extendedprice := tpch:l_extendedprice (9:1)
+                                        l_shipdate := tpch:l_shipdate (9:1)
+                                        l_discount := tpch:l_discount (9:1)
+                                - LocalExchange[PlanNodeId 1060][HASH] (o_orderkey) => [o_orderkey:bigint, o_orderdate:date, o_shippriority:integer]
+                                        Estimates: {source: CostBasedSourceInfo, rows: 221,173 (5.91MB), cpu: 145,870,077.70, memory: 270,000.00, network: 25,114,284.52}
+                                    - RemoteStreamingExchange[PlanNodeId 960][REPARTITION - COLUMNAR] => [o_orderkey:bigint, o_orderdate:date, o_shippriority:integer]
+                                            Estimates: {source: CostBasedSourceInfo, rows: 221,173 (5.91MB), cpu: 141,667,789.03, memory: 270,000.00, network: 25,114,284.52}
+                                        - InnerJoin[PlanNodeId 852][("o_custkey" = "c_custkey")] => [o_orderkey:bigint, o_orderdate:date, o_shippriority:integer]
+                                                Estimates: {source: CostBasedSourceInfo, rows: 221,173 (5.91MB), cpu: 137,465,500.36, memory: 270,000.00, network: 20,911,995.84}
+                                                Distribution: PARTITIONED
+                                            - RemoteStreamingExchange[PlanNodeId 958][REPARTITION - COLUMNAR] => [o_orderkey:bigint, o_custkey:bigint, o_orderdate:date, o_shippriority:integer]
+                                                    Estimates: {source: CostBasedSourceInfo, rows: 737,214 (19.69MB), cpu: 104,641,995.84, memory: 0.00, network: 20,641,995.84}
+                                                - ScanFilter[PlanNodeId 1,956][table = TableHandle {connectorId='tpchstandard', connectorHandle='orders:sf1.0', layout='Optional[orders:sf1.0]'}, filterPredicate = (o_orderdate) < (DATE'1995-03-28')] => [o_orderkey:bigint, o_custkey:bigint, o_orderdate:date, o_shippriority:integer]
+                                                        Estimates: {source: CostBasedSourceInfo, rows: 1,500,000 (40.05MB), cpu: 42,000,000.00, memory: 0.00, network: 0.00}/{source: CostBasedSourceInfo, rows: 737,214 (19.69MB), cpu: 84,000,000.00, memory: 0.00, network: 0.00}
+                                                        o_shippriority := tpch:o_shippriority (8:1)
+                                                        o_orderkey := tpch:o_orderkey (8:1)
+                                                        o_custkey := tpch:o_custkey (8:1)
+                                                        o_orderdate := tpch:o_orderdate (8:1)
+                                                        tpch:o_orderstatus
+                                                            :: [["F"], ["O"], ["P"]]
+                                            - LocalExchange[PlanNodeId 1059][HASH] (c_custkey) => [c_custkey:bigint]
+                                                    Estimates: {source: CostBasedSourceInfo, rows: 30,000 (820.31kB), cpu: 7,709,220.00, memory: 0.00, network: 270,000.00}
+                                                - RemoteStreamingExchange[PlanNodeId 959][REPARTITION - COLUMNAR] => [c_custkey:bigint]
+                                                        Estimates: {source: CostBasedSourceInfo, rows: 30,000 (820.31kB), cpu: 7,439,220.00, memory: 0.00, network: 270,000.00}
+                                                    - ScanFilterProject[PlanNodeId 0,957,536][table = TableHandle {connectorId='tpchstandard', connectorHandle='customer:sf1.0', layout='Optional[customer:sf1.0]'}, filterPredicate = (c_mktsegment) = (VARCHAR'HOUSEHOLD'), projectLocality = LOCAL] => [c_custkey:bigint]
+                                                            Estimates: {source: CostBasedSourceInfo, rows: 150,000 (4.01MB), cpu: 3,449,610.00, memory: 0.00, network: 0.00}/{source: CostBasedSourceInfo, rows: 30,000 (820.31kB), cpu: 6,899,220.00, memory: 0.00, network: 0.00}/{source: CostBasedSourceInfo, rows: 30,000 (820.31kB), cpu: 7,169,220.00, memory: 0.00, network: 0.00}
+                                                            c_custkey := tpch:c_custkey (7:1)
+                                                            c_mktsegment := tpch:c_mktsegment (7:1)
+
+

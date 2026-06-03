@@ -1,0 +1,29 @@
+- Output[PlanNodeId 26][o_orderpriority, order_count] => [o_orderpriority:varchar(15), count:bigint]
+        order_count := count (3:1)
+    - RemoteStreamingMerge[PlanNodeId 959][o_orderpriority ASC_NULLS_LAST] => [o_orderpriority:varchar(15), count:bigint]
+        - LocalMerge[PlanNodeId 1030][o_orderpriority ASC_NULLS_LAST] => [o_orderpriority:varchar(15), count:bigint]
+            - PartialSort[PlanNodeId 960][o_orderpriority ASC_NULLS_LAST] => [o_orderpriority:varchar(15), count:bigint]
+                - RemoteStreamingExchange[PlanNodeId 958][REPARTITION - COLUMNAR] => [o_orderpriority:varchar(15), count:bigint]
+                    - Aggregate(FINAL)[o_orderpriority][PlanNodeId 19] => [o_orderpriority:varchar(15), count:bigint]
+                            count := "presto.default.count"((count_74)) (3:1)
+                        - LocalExchange[PlanNodeId 1052][HASH] (o_orderpriority) => [o_orderpriority:varchar(15), count_74:bigint]
+                            - RemoteStreamingExchange[PlanNodeId 1058][REPARTITION - COLUMNAR] => [o_orderpriority:varchar(15), count_74:bigint]
+                                - Aggregate(PARTIAL)[o_orderpriority][PlanNodeId 1056] => [o_orderpriority:varchar(15), count_74:bigint]
+                                        count_74 := "presto.default.count"(*) (3:1)
+                                    - InnerJoin[PlanNodeId 332][("o_orderkey" = "l_orderkey")] => [o_orderpriority:varchar(15)]
+                                            Estimates: {source: CostBasedSourceInfo, rows: ? (?), cpu: ?, memory: ?, network: 0.00}
+                                            Distribution: PARTITIONED
+                                        - ScanFilterProject[PlanNodeId 0,955,510][table = TableHandle {connectorId='tpchstandard', connectorHandle='orders:sf1.0', layout='Optional[orders:sf1.0]'}, filterPredicate = ((o_orderdate) >= (DATE'1997-04-01')) AND ((o_orderdate) < (DATE'1997-07-01')), projectLocality = LOCAL] => [o_orderkey:bigint, o_orderpriority:varchar(15)]
+                                                Estimates: {source: CostBasedSourceInfo, rows: 1,500,000 (32.04MB), cpu: 41,099,829.00, memory: 0.00, network: 0.00}/{source: CostBasedSourceInfo, rows: 56,757 (1.21MB), cpu: 82,199,658.00, memory: 0.00, network: 0.00}/{source: CostBasedSourceInfo, rows: 56,757 (1.21MB), cpu: 83,471,002.88, memory: 0.00, network: 0.00}
+                                                o_orderkey := tpch:o_orderkey (5:1)
+                                                o_orderpriority := tpch:o_orderpriority (5:1)
+                                                o_orderdate := tpch:o_orderdate (5:1)
+                                                tpch:o_orderstatus
+                                                    :: [["F"], ["O"], ["P"]]
+                                        - Aggregate(STREAMING)[l_orderkey][PlanNodeId 330] => [l_orderkey:bigint]
+                                                Estimates: {source: CostBasedSourceInfo, rows: ? (?), cpu: ?, memory: ?, network: 0.00}
+                                            - ScanFilterProject[PlanNodeId 1,956,329][table = TableHandle {connectorId='tpchstandard', connectorHandle='lineitem:sf1.0', layout='Optional[lineitem:sf1.0]'}, filterPredicate = (l_commitdate) < (l_receiptdate), projectLocality = LOCAL] => [l_orderkey:bigint]
+                                                    Estimates: {source: CostBasedSourceInfo, rows: 6,001,215 (366.29MB), cpu: 114,023,085.00, memory: 0.00, network: 0.00}/{source: CostBasedSourceInfo, rows: ? (?), cpu: 228,046,170.00, memory: 0.00, network: 0.00}/{source: CostBasedSourceInfo, rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}
+                                                    l_commitdate := tpch:l_commitdate (13:1)
+                                                    l_orderkey := tpch:l_orderkey (13:1)
+                                                    l_receiptdate := tpch:l_receiptdate (13:1)

@@ -1,0 +1,36 @@
+- Output[PlanNodeId 13][l_shipmode, high_line_count, low_line_count] => [l_shipmode:varchar(10), sum:bigint, sum_3:bigint]
+        high_line_count := sum (3:1)
+        low_line_count := sum_3 (9:1)
+    - RemoteStreamingMerge[PlanNodeId 652][l_shipmode ASC_NULLS_LAST] => [l_shipmode:varchar(10), sum:bigint, sum_3:bigint]
+        - LocalMerge[PlanNodeId 712][l_shipmode ASC_NULLS_LAST] => [l_shipmode:varchar(10), sum:bigint, sum_3:bigint]
+            - PartialSort[PlanNodeId 653][l_shipmode ASC_NULLS_LAST] => [l_shipmode:varchar(10), sum:bigint, sum_3:bigint]
+                - RemoteStreamingExchange[PlanNodeId 651][REPARTITION - COLUMNAR] => [l_shipmode:varchar(10), sum:bigint, sum_3:bigint]
+                    - Aggregate(FINAL)[l_shipmode][PlanNodeId 6] => [l_shipmode:varchar(10), sum_3:bigint, sum:bigint]
+                            sum_3 := "presto.default.sum"((sum_16)) (9:1)
+                            sum := "presto.default.sum"((sum_15)) (3:1)
+                        - LocalExchange[PlanNodeId 732][HASH] (l_shipmode) => [l_shipmode:varchar(10), sum_16:bigint, sum_15:bigint]
+                            - RemoteStreamingExchange[PlanNodeId 738][REPARTITION - COLUMNAR] => [l_shipmode:varchar(10), sum_16:bigint, sum_15:bigint]
+                                - Aggregate(PARTIAL)[l_shipmode][PlanNodeId 736] => [l_shipmode:varchar(10), sum_16:bigint, sum_15:bigint]
+                                        sum_16 := "presto.default.sum"((expr_2)) (9:1)
+                                        sum_15 := "presto.default.sum"((expr)) (3:1)
+                                    - Project[PlanNodeId 4][projectLocality = LOCAL] => [l_shipmode:varchar(10), expr:bigint, expr_2:bigint]
+                                            Estimates: {source: CostBasedSourceInfo, rows: 198,563 (5.17MB), cpu: 483,888,052.71, memory: 3,630,783.96, network: 0.00}
+                                            expr := CAST(SWITCH(BOOLEAN'true', WHEN(((o_orderpriority) = (VARCHAR'1-URGENT')) OR ((o_orderpriority) = (VARCHAR'2-HIGH')), INTEGER'1'), INTEGER'0') AS bigint) (7:6)
+                                            expr_2 := CAST(SWITCH(BOOLEAN'true', WHEN(((o_orderpriority) <> (VARCHAR'1-URGENT')) AND ((o_orderpriority) <> (VARCHAR'2-HIGH')), INTEGER'1'), INTEGER'0') AS bigint) (13:6)
+                                        - InnerJoin[PlanNodeId 588][("o_orderkey" = "l_orderkey")] => [o_orderpriority:varchar(15), l_shipmode:varchar(10)]
+                                                Estimates: {source: CostBasedSourceInfo, rows: 198,563 (5.17MB), cpu: 478,470,202.22, memory: 3,630,783.96, network: 0.00}
+                                                Distribution: PARTITIONED
+                                            - TableScan[PlanNodeId 0][TableHandle {connectorId='tpchstandard', connectorHandle='orders:sf1.0', layout='Optional[orders:sf1.0]'}] => [o_orderkey:bigint, o_orderpriority:varchar(15)]
+                                                    Estimates: {source: CostBasedSourceInfo, rows: 1,500,000 (104.43MB), cpu: 33,599,829.00, memory: 0.00, network: 0.00}
+                                                    o_orderpriority := tpch:o_orderpriority (16:1)
+                                                    o_orderkey := tpch:o_orderkey (16:1)
+                                                    tpch:o_orderstatus
+                                                        :: [["F"], ["O"], ["P"]]
+                                            - ScanFilterProject[PlanNodeId 1,649,309][table = TableHandle {connectorId='tpchstandard', connectorHandle='lineitem:sf1.0', layout='Optional[lineitem:sf1.0]'}, filterPredicate = (((IN(l_shipmode, VARCHAR'MAIL', VARCHAR'RAIL')) AND ((l_receiptdate) >= (DATE'1995-01-01'))) AND (((l_receiptdate) < (DATE'1996-01-01')) AND ((l_commitdate) < (l_receiptdate)))) AND ((l_shipdate) < (l_commitdate)), projectLocality = LOCAL] => [l_orderkey:bigint, l_shipmode:varchar(10)]
+                                                    Estimates: {source: CostBasedSourceInfo, rows: 6,001,215 (156.16MB), cpu: 199,752,269.00, memory: 0.00, network: 0.00}/{source: CostBasedSourceInfo, rows: 198,563 (5.17MB), cpu: 399,504,538.00, memory: 0.00, network: 0.00}/{source: CostBasedSourceInfo, rows: 198,563 (5.17MB), cpu: 403,135,321.96, memory: 0.00, network: 0.00}
+                                                    l_commitdate := tpch:l_commitdate (17:1)
+                                                    l_orderkey := tpch:l_orderkey (17:1)
+                                                    l_receiptdate := tpch:l_receiptdate (17:1)
+                                                    l_shipmode := tpch:l_shipmode (17:1)
+                                                    l_shipdate := tpch:l_shipdate (17:1)
+

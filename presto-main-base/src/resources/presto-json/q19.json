@@ -1,0 +1,38 @@
+utput[PlanNodeId 11][revenue] => [sum:double]
+        revenue := sum (2:1)
+    - Aggregate(FINAL)[PlanNodeId 6] => [sum:double]
+            sum := "presto.default.sum"((sum_5)) (2:1)
+        - LocalExchange[PlanNodeId 640][SINGLE] () => [sum_5:double]
+            - RemoteStreamingExchange[PlanNodeId 646][GATHER - COLUMNAR] => [sum_5:double]
+                - Aggregate(PARTIAL)[PlanNodeId 644] => [sum_5:double]
+                        sum_5 := "presto.default.sum"((expr)) (2:1)
+                    - Project[PlanNodeId 141][projectLocality = LOCAL] => [expr:double]
+                            Estimates: {source: CostBasedSourceInfo, rows: 190 (1.67kB), cpu: 825,518,767.59, memory: 7,914,971.00, network: 23,346,666.71}
+                            expr := (l_extendedprice) * ((DOUBLE'1.0') - (l_discount)) (4:2)
+                        - InnerJoin[PlanNodeId 513][("l_partkey" = "p_partkey") AND ((((((p_brand) = (VARCHAR'Brand#42')) AND (IN(p_container, VARCHAR'SM CASE', VARCHAR'SM BOX', VARCHAR'SM PACK', VARCHAR'SM PKG'))) AND (((l_quantity) >= (DOUBLE'1.0')) AND ((l_quantity) <= (DOUBLE'11.0')))) AND (p_size BETWEEN (INTEGER'1') AND (INTEGER'5'))) OR (((((p_brand) = (VARCHAR'Brand#51')) AND (IN(p_container, VARCHAR'MED BAG', VARCHAR'MED BOX', VARCHAR'MED PKG', VARCHAR'MED PACK'))) AND (((l_quantity) >= (DOUBLE'11.0')) AND ((l_quantity) <= (DOUBLE'21.0')))) AND (p_size BETWEEN (INTEGER'1') AND (INTEGER'10')))) OR (((((p_brand) = (VARCHAR'Brand#54')) AND (IN(p_container, VARCHAR'LG CASE', VARCHAR'LG BOX', VARCHAR'LG PACK', VARCHAR'LG PKG'))) AND (((l_quantity) >= (DOUBLE'27.0')) AND ((l_quantity) <= (DOUBLE'37.0')))) AND (p_size BETWEEN (INTEGER'1') AND (INTEGER'15')))] => [l_extendedprice:double, l_discount:double]
+                                Estimates: {source: CostBasedSourceInfo, rows: 190 (1.67kB), cpu: 825,517,057.44, memory: 7,914,971.00, network: 23,346,666.71}
+                                Distribution: PARTITIONED
+                            - RemoteStreamingExchange[PlanNodeId 566][REPARTITION - COLUMNAR] => [l_partkey:bigint, l_quantity:double, l_extendedprice:double, l_discount:double]
+                                    Estimates: {source: CostBasedSourceInfo, rows: 428,658 (3.68MB), cpu: 778,422,057.43, memory: 0.00, network: 15,431,695.71}
+                                - ScanFilterProject[PlanNodeId 0,565,345][table = TableHandle {connectorId='tpchstandard', connectorHandle='lineitem:sf1.0', layout='Optional[lineitem:sf1.0]'}, filterPredicate = (IN(l_shipmode, VARCHAR'AIR', VARCHAR'AIR REG')) AND ((l_shipinstruct) = (VARCHAR'DELIVER IN PERSON')), projectLocality = LOCAL] => [l_partkey:bigint, l_quantity:double, l_extendedprice:double, l_discount:double]
+                                        Estimates: {source: CostBasedSourceInfo, rows: 6,001,215 (51.51MB), cpu: 373,779,333.00, memory: 0.00, network: 0.00}/{source: CostBasedSourceInfo, rows: 428,658 (3.68MB), cpu: 747,558,666.00, memory: 0.00, network: 0.00}/{source: CostBasedSourceInfo, rows: 428,658 (3.68MB), cpu: 762,990,361.71, memory: 0.00, network: 0.00}
+                                        l_partkey := tpch:l_partkey (4:1)
+                                        l_shipinstruct := tpch:l_shipinstruct (4:1)
+                                        l_discount := tpch:l_discount (4:1)
+                                        l_extendedprice := tpch:l_extendedprice (4:1)
+                                        l_quantity := tpch:l_quantity (4:1)
+                                        l_shipmode := tpch:l_shipmode (4:1)
+                            - LocalExchange[PlanNodeId 620][HASH] (p_partkey) => [p_partkey:bigint, p_brand:varchar(10), p_size:integer, p_container:varchar(10)]
+                                    Estimates: {source: CostBasedSourceInfo, rows: 200,000 (1.72MB), cpu: 23,744,913.00, memory: 0.00, network: 7,914,971.00}
+                                - RemoteStreamingExchange[PlanNodeId 567][REPARTITION - COLUMNAR] => [p_partkey:bigint, p_brand:varchar(10), p_size:integer, p_container:varchar(10)]
+                                        Estimates: {source: CostBasedSourceInfo, rows: 200,000 (1.72MB), cpu: 15,829,942.00, memory: 0.00, network: 7,914,971.00}
+                                    - TableScan[PlanNodeId 1][TableHandle {connectorId='tpchstandard', connectorHandle='part:sf1.0', layout='Optional[part:sf1.0]'}] => [p_partkey:bigint, p_brand:varchar(10), p_size:integer, p_container:varchar(10)]
+                                            Estimates: {source: CostBasedSourceInfo, rows: 200,000 (1.72MB), cpu: 7,914,971.00, memory: 0.00, network: 0.00}
+                                            p_brand := tpch:p_brand (5:1)
+                                            p_size := tpch:p_size (5:1)
+                                            p_partkey := tpch:p_partkey (5:1)
+                                            p_container := tpch:p_container (5:1)
+                                                :: [["JUMBO BAG", "WRAP PKG"]]
+                                            tpch:p_type
+                                                :: [["ECONOMY ANODIZED BRASS", "STANDARD POLISHED TIN"]]
+

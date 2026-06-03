@@ -1,0 +1,102 @@
+utput[PlanNodeId 32][ps_partkey, value] => [ps_partkey:bigint, sum:double]
+        value := sum (3:1)
+    - RemoteStreamingMerge[PlanNodeId 1961][sum DESC_NULLS_LAST] => [sum:double, ps_partkey:bigint]
+        - LocalMerge[PlanNodeId 2169][sum DESC_NULLS_LAST] => [sum:double, ps_partkey:bigint]
+            - PartialSort[PlanNodeId 1962][sum DESC_NULLS_LAST] => [sum:double, ps_partkey:bigint]
+                - RemoteStreamingExchange[PlanNodeId 1960][REPARTITION - COLUMNAR] => [sum:double, ps_partkey:bigint]
+                    - FilterProject[PlanNodeId 892,26][filterPredicate = (sum) > (expr_26), projectLocality = LOCAL] => [sum:double, ps_partkey:bigint]
+                        - CrossJoin[PlanNodeId 593] => [ps_partkey:bigint, sum:double, expr_26:double]
+                                Distribution: REPLICATED
+                            - Aggregate(FINAL)[ps_partkey][PlanNodeId 8] => [ps_partkey:bigint, sum:double]
+                                    sum := "presto.default.sum"((sum_37)) (3:1)
+                                - LocalExchange[PlanNodeId 2223][HASH] (ps_partkey) => [ps_partkey:bigint, sum_37:double]
+                                    - RemoteStreamingExchange[PlanNodeId 2229][REPARTITION - COLUMNAR] => [ps_partkey:bigint, sum_37:double]
+                                        - Aggregate(PARTIAL)[ps_partkey][PlanNodeId 2227] => [ps_partkey:bigint, sum_37:double]
+                                                sum_37 := "presto.default.sum"((expr_3)) (3:1)
+                                            - Project[PlanNodeId 437][projectLocality = LOCAL] => [ps_partkey:bigint, expr_3:double]
+                                                    Estimates: {source: CostBasedSourceInfo, rows: 32,000 (562.50kB), cpu: 78,667,490.00, memory: 3,609.00, network: 25,783,609.00}
+                                                    expr_3 := (ps_supplycost) * (CAST(ps_availqty AS double)) (5:2)
+                                                - InnerJoin[PlanNodeId 1749][("ps_suppkey" = "s_suppkey")] => [ps_partkey:bigint, ps_availqty:integer, ps_supplycost:double]
+                                                        Estimates: {source: CostBasedSourceInfo, rows: 32,000 (562.50kB), cpu: 78,091,490.00, memory: 3,609.00, network: 25,783,609.00}
+                                                        Distribution: PARTITIONED
+                                                    - RemoteStreamingExchange[PlanNodeId 1950][REPARTITION - COLUMNAR] => [ps_partkey:bigint, ps_suppkey:bigint, ps_availqty:integer, ps_supplycost:double]
+                                                            Estimates: {source: CostBasedSourceInfo, rows: 800,000 (13.73MB), cpu: 51,200,000.00, memory: 0.00, network: 25,600,000.00}
+                                                        - TableScan[PlanNodeId 0][TableHandle {connectorId='tpchstandard', connectorHandle='partsupp:sf1.0', layout='Optional[partsupp:sf1.0]'}] => [ps_partkey:bigint, ps_suppkey:bigint, ps_availqty:integer, ps_supplycost:double]
+                                                                Estimates: {source: CostBasedSourceInfo, rows: 800,000 (13.73MB), cpu: 25,600,000.00, memory: 0.00, network: 0.00}
+                                                                ps_suppkey := tpch:ps_suppkey (5:1)
+                                                                ps_supplycost := tpch:ps_supplycost (5:1)
+                                                                ps_partkey := tpch:ps_partkey (5:1)
+                                                                ps_availqty := tpch:ps_availqty (5:1)
+                                                    - LocalExchange[PlanNodeId 2161][HASH] (s_suppkey) => [s_suppkey:bigint]
+                                                            Estimates: {source: CostBasedSourceInfo, rows: 400 (7.03kB), cpu: 551,890.00, memory: 9.00, network: 183,609.00}
+                                                        - RemoteStreamingExchange[PlanNodeId 1951][REPARTITION - COLUMNAR] => [s_suppkey:bigint]
+                                                                Estimates: {source: CostBasedSourceInfo, rows: 400 (7.03kB), cpu: 548,290.00, memory: 9.00, network: 183,609.00}
+                                                            - InnerJoin[PlanNodeId 1748][("s_nationkey" = "n_nationkey")] => [s_suppkey:bigint]
+                                                                    Estimates: {source: CostBasedSourceInfo, rows: 400 (7.03kB), cpu: 544,690.00, memory: 9.00, network: 180,009.00}
+                                                                    Distribution: PARTITIONED
+                                                                - RemoteStreamingExchange[PlanNodeId 1948][REPARTITION - COLUMNAR] => [s_suppkey:bigint, s_nationkey:bigint]
+                                                                        Estimates: {source: CostBasedSourceInfo, rows: 10,000 (175.78kB), cpu: 360,000.00, memory: 0.00, network: 180,000.00}
+                                                                    - TableScan[PlanNodeId 1][TableHandle {connectorId='tpchstandard', connectorHandle='supplier:sf1.0', layout='Optional[supplier:sf1.0]'}] => [s_suppkey:bigint, s_nationkey:bigint]
+                                                                            Estimates: {source: CostBasedSourceInfo, rows: 10,000 (175.78kB), cpu: 180,000.00, memory: 0.00, network: 0.00}
+                                                                            s_nationkey := tpch:s_nationkey (6:1)
+                                                                            s_suppkey := tpch:s_suppkey (6:1)
+                                                                - LocalExchange[PlanNodeId 2160][HASH] (n_nationkey) => [n_nationkey:bigint]
+                                                                        Estimates: {source: CostBasedSourceInfo, rows: 1 (18B), cpu: 1,081.00, memory: 0.00, network: 9.00}
+                                                                    - RemoteStreamingExchange[PlanNodeId 1949][REPARTITION - COLUMNAR] => [n_nationkey:bigint]
+                                                                            Estimates: {source: CostBasedSourceInfo, rows: 1 (18B), cpu: 1,072.00, memory: 0.00, network: 9.00}
+                                                                        - ScanFilterProject[PlanNodeId 3,1947,1177][table = TableHandle {connectorId='tpchstandard', connectorHandle='nation:sf1.0', layout='Optional[nation:sf1.0]'}, filterPredicate = (n_name) = (VARCHAR'PERU'), projectLocality = LOCAL] => [n_nationkey:bigint]
+                                                                                Estimates: {source: CostBasedSourceInfo, rows: 25 (450B), cpu: 527.00, memory: 0.00, network: 0.00}/{source: CostBasedSourceInfo, rows: 1 (18B), cpu: 1,054.00, memory: 0.00, network: 0.00}/{source: CostBasedSourceInfo, rows: 1 (18B), cpu: 1,063.00, memory: 0.00, network: 0.00}
+                                                                                n_name := tpch:n_name (7:1)
+                                                                                n_nationkey := tpch:n_nationkey (7:1)
+                            - LocalExchange[PlanNodeId 2168][SINGLE] () => [expr_26:double]
+                                    Estimates: {source: CostBasedSourceInfo, rows: 1 (18B), cpu: ?, memory: ?, network: ?}
+                                - RemoteStreamingExchange[PlanNodeId 1959][REPLICATE - COLUMNAR] => [expr_26:double]
+                                        Estimates: {source: CostBasedSourceInfo, rows: 1 (18B), cpu: ?, memory: ?, network: ?}
+                                    - EnforceSingleRow[PlanNodeId 22] => [expr_26:double]
+                                            Estimates: {source: CostBasedSourceInfo, rows: 1 (18B), cpu: ?, memory: ?, network: ?}
+                                        - LocalExchange[PlanNodeId 2167][SINGLE] () => [expr_26:double]
+                                            - Project[PlanNodeId 18][projectLocality = LOCAL] => [expr_26:double]
+                                                    expr_26 := (sum_25) * (DOUBLE'1.0E-6') (16:34)
+                                                - LocalExchange[PlanNodeId 2166][ROUND_ROBIN] () => [sum_25:double]
+                                                    - Aggregate(FINAL)[PlanNodeId 17] => [sum_25:double]
+                                                            sum_25 := "presto.default.sum"((sum_38)) (16:1)
+                                                        - LocalExchange[PlanNodeId 2239][SINGLE] () => [sum_38:double]
+                                                            - RemoteStreamingExchange[PlanNodeId 2245][GATHER - COLUMNAR] => [sum_38:double]
+                                                                - Aggregate(PARTIAL)[PlanNodeId 2243] => [sum_38:double]
+                                                                        sum_38 := "presto.default.sum"((expr_24)) (16:1)
+                                                                    - Project[PlanNodeId 438][projectLocality = LOCAL] => [expr_24:double]
+                                                                            Estimates: {source: CostBasedSourceInfo, rows: 32,000 (562.50kB), cpu: 56,491,490.00, memory: 3,609.00, network: 18,583,609.00}
+                                                                            expr_24 := (ps_supplycost_8) * (CAST(ps_availqty_7 AS double)) (18:2)
+                                                                        - InnerJoin[PlanNodeId 1757][("ps_suppkey_6" = "s_suppkey_11")] => [ps_availqty_7:integer, ps_supplycost_8:double]
+                                                                                Estimates: {source: CostBasedSourceInfo, rows: 32,000 (562.50kB), cpu: 56,203,490.00, memory: 3,609.00, network: 18,583,609.00}
+                                                                                Distribution: PARTITIONED
+                                                                            - RemoteStreamingExchange[PlanNodeId 1956][REPARTITION - COLUMNAR] => [ps_suppkey_6:bigint, ps_availqty_7:integer, ps_supplycost_8:double]
+                                                                                    Estimates: {source: CostBasedSourceInfo, rows: 800,000 (13.73MB), cpu: 36,800,000.00, memory: 0.00, network: 18,400,000.00}
+                                                                                - TableScan[PlanNodeId 9][TableHandle {connectorId='tpchstandard', connectorHandle='partsupp:sf1.0', layout='Optional[partsupp:sf1.0]'}] => [ps_suppkey_6:bigint, ps_availqty_7:integer, ps_supplycost_8:double]
+                                                                                        Estimates: {source: CostBasedSourceInfo, rows: 800,000 (13.73MB), cpu: 18,400,000.00, memory: 0.00, network: 0.00}
+                                                                                        ps_availqty_7 := tpch:ps_availqty (18:1)
+                                                                                        ps_suppkey_6 := tpch:ps_suppkey (18:1)
+                                                                                        ps_supplycost_8 := tpch:ps_supplycost (18:1)
+                                                                            - LocalExchange[PlanNodeId 2164][HASH] (s_suppkey_11) => [s_suppkey_11:bigint]
+                                                                                    Estimates: {source: CostBasedSourceInfo, rows: 400 (7.03kB), cpu: 551,890.00, memory: 9.00, network: 183,609.00}
+                                                                                - RemoteStreamingExchange[PlanNodeId 1957][REPARTITION - COLUMNAR] => [s_suppkey_11:bigint]
+                                                                                        Estimates: {source: CostBasedSourceInfo, rows: 400 (7.03kB), cpu: 548,290.00, memory: 9.00, network: 183,609.00}
+                                                                                    - InnerJoin[PlanNodeId 1756][("s_nationkey_14" = "n_nationkey_19")] => [s_suppkey_11:bigint]
+                                                                                            Estimates: {source: CostBasedSourceInfo, rows: 400 (7.03kB), cpu: 544,690.00, memory: 9.00, network: 180,009.00}
+                                                                                            Distribution: PARTITIONED
+                                                                                        - RemoteStreamingExchange[PlanNodeId 1954][REPARTITION - COLUMNAR] => [s_suppkey_11:bigint, s_nationkey_14:bigint]
+                                                                                                Estimates: {source: CostBasedSourceInfo, rows: 10,000 (175.78kB), cpu: 360,000.00, memory: 0.00, network: 180,000.00}
+                                                                                            - TableScan[PlanNodeId 10][TableHandle {connectorId='tpchstandard', connectorHandle='supplier:sf1.0', layout='Optional[supplier:sf1.0]'}] => [s_suppkey_11:bigint, s_nationkey_14:bigint]
+                                                                                                    Estimates: {source: CostBasedSourceInfo, rows: 10,000 (175.78kB), cpu: 180,000.00, memory: 0.00, network: 0.00}
+                                                                                                    s_suppkey_11 := tpch:s_suppkey (19:1)
+                                                                                                    s_nationkey_14 := tpch:s_nationkey (19:1)
+                                                                                        - LocalExchange[PlanNodeId 2163][HASH] (n_nationkey_19) => [n_nationkey_19:bigint]
+                                                                                                Estimates: {source: CostBasedSourceInfo, rows: 1 (18B), cpu: 1,081.00, memory: 0.00, network: 9.00}
+                                                                                            - RemoteStreamingExchange[PlanNodeId 1955][REPARTITION - COLUMNAR] => [n_nationkey_19:bigint]
+                                                                                                    Estimates: {source: CostBasedSourceInfo, rows: 1 (18B), cpu: 1,072.00, memory: 0.00, network: 9.00}
+                                                                                                - ScanFilterProject[PlanNodeId 12,1953,1178][table = TableHandle {connectorId='tpchstandard', connectorHandle='nation:sf1.0', layout='Optional[nation:sf1.0]'}, filterPredicate = (n_name_20) = (VARCHAR'PERU'), projectLocality = LOCAL] => [n_nationkey_19:bigint]
+                                                                                                        Estimates: {source: CostBasedSourceInfo, rows: 25 (450B), cpu: 527.00, memory: 0.00, network: 0.00}/{source: CostBasedSourceInfo, rows: 1 (18B), cpu: 1,054.00, memory: 0.00, network: 0.00}/{source: CostBasedSourceInfo, rows: 1 (18B), cpu: 1,063.00, memory: 0.00, network: 0.00}
+                                                                                                        n_name_20 := tpch:n_name (20:1)
+                                                                                                        n_nationkey_19 := tpch:n_nationkey (20:1)
+
+

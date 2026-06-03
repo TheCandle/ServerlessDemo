@@ -76,6 +76,8 @@ import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.google.errorprone.annotations.ThreadSafe;
 import io.airlift.slice.Slices;
 import jakarta.inject.Inject;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
@@ -116,6 +118,7 @@ import static java.util.concurrent.TimeUnit.SECONDS;
 public class SqlQueryExecution
         implements QueryExecution
 {
+    private static final Logger LOG = LoggerFactory.getLogger(SqlQueryExecution.class);
     private static final OutputBufferId OUTPUT_BUFFER_ID = new OutputBufferId(0);
 
     private final QueryAnalyzer queryAnalyzer;
@@ -992,6 +995,18 @@ public class SqlQueryExecution
             Plan plan = getSession().getRuntimeStats().recordWallAndCpuTime(
                     OPTIMIZER_TIME_NANOS,
                     () -> optimizer.validateAndOptimizePlan(planNode, OPTIMIZED_AND_VALIDATED));
+
+            if (LOG.isInfoEnabled()) {
+                LOG.info("Optimized physical plan for query {}:\n{}",
+                        stateMachine.getQueryId(),
+                        com.facebook.presto.sql.planner.planPrinter.PlanPrinter.textLogicalPlan(
+                                plan.getRoot(),
+                                plan.getTypes(),
+                                plan.getStatsAndCosts(),
+                                metadata.getFunctionAndTypeManager(),
+                                stateMachine.getSession(),
+                                0));
+            }
 
             queryPlan.set(plan);
             stateMachine.setPlanStatsAndCosts(plan.getStatsAndCosts());

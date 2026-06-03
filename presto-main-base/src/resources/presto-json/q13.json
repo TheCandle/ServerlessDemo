@@ -1,0 +1,37 @@
+- Output[PlanNodeId 23][c_count, custdist] => [count:bigint, count_13:bigint]
+        c_count := count (2:1)
+        custdist := count_13 (3:1)
+    - RemoteStreamingMerge[PlanNodeId 804][count_13 DESC_NULLS_LAST, count DESC_NULLS_LAST] => [count:bigint, count_13:bigint]
+        - LocalMerge[PlanNodeId 883][count_13 DESC_NULLS_LAST, count DESC_NULLS_LAST] => [count:bigint, count_13:bigint]
+            - PartialSort[PlanNodeId 805][count_13 DESC_NULLS_LAST, count DESC_NULLS_LAST] => [count:bigint, count_13:bigint]
+                - RemoteStreamingExchange[PlanNodeId 803][REPARTITION - COLUMNAR] => [count:bigint, count_13:bigint]
+                    - Aggregate(FINAL)[count][PlanNodeId 16] => [count:bigint, count_13:bigint]
+                            count_13 := "presto.default.count"((count_22)) (3:1)
+                        - LocalExchange[PlanNodeId 908][HASH] (count) => [count:bigint, count_22:bigint]
+                            - RemoteStreamingExchange[PlanNodeId 914][REPARTITION - COLUMNAR] => [count:bigint, count_22:bigint]
+                                - Aggregate(PARTIAL)[count][PlanNodeId 912] => [count:bigint, count_22:bigint]
+                                        count_22 := "presto.default.count"(*) (3:1)
+                                    - Project[PlanNodeId 9][projectLocality = LOCAL] => [count:bigint]
+                                        - Aggregate(FINAL)[c_custkey][PlanNodeId 8] => [c_custkey:bigint, count:bigint]
+                                                count := "presto.default.count"((count_23)) (8:1)
+                                            - LocalExchange[PlanNodeId 924][HASH] (c_custkey) => [c_custkey:bigint, count_23:bigint]
+                                                - Aggregate(PARTIAL)[c_custkey][PlanNodeId 922] => [c_custkey:bigint, count_23:bigint]
+                                                        count_23 := "presto.default.count"((o_orderkey)) (8:1)
+                                                    - LeftJoin[PlanNodeId 5][("c_custkey" = "o_custkey")] => [c_custkey:bigint, o_orderkey:bigint]
+                                                            Distribution: PARTITIONED
+                                                        - RemoteStreamingExchange[PlanNodeId 800][REPARTITION - COLUMNAR] => [c_custkey:bigint]
+                                                                Estimates: {source: CostBasedSourceInfo, rows: 150,000 (2.57MB), cpu: 2,700,000.00, memory: 0.00, network: 1,350,000.00}
+                                                            - TableScan[PlanNodeId 0][TableHandle {connectorId='tpchstandard', connectorHandle='customer:sf1.0', layout='Optional[customer:sf1.0]'}] => [c_custkey:bigint]
+                                                                    Estimates: {source: CostBasedSourceInfo, rows: 150,000 (2.57MB), cpu: 1,350,000.00, memory: 0.00, network: 0.00}
+                                                                    c_custkey := tpch:c_custkey (10:1)
+                                                        - LocalExchange[PlanNodeId 880][HASH] (o_custkey) => [o_orderkey:bigint, o_custkey:bigint]
+                                                                Estimates: {source: CostBasedSourceInfo, rows: ? (?), cpu: ?, memory: 0.00, network: ?}
+                                                            - RemoteStreamingExchange[PlanNodeId 801][REPARTITION - COLUMNAR] => [o_orderkey:bigint, o_custkey:bigint]
+                                                                    Estimates: {source: CostBasedSourceInfo, rows: ? (?), cpu: ?, memory: 0.00, network: ?}
+                                                                - ScanFilterProject[PlanNodeId 1,799,418][table = TableHandle {connectorId='tpchstandard', connectorHandle='orders:sf1.0', layout='Optional[orders:sf1.0]'}, filterPredicate = not(o_comment LIKE VARCHAR'%unusual%requests%'), projectLocality = LOCAL] => [o_orderkey:bigint, o_custkey:bigint]
+                                                                        Estimates: {source: CostBasedSourceInfo, rows: 1,500,000 (25.75MB), cpu: 107,270,808.00, memory: 0.00, network: 0.00}/{source: CostBasedSourceInfo, rows: ? (?), cpu: 214,541,616.00, memory: 0.00, network: 0.00}/{source: CostBasedSourceInfo, rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}
+                                                                        o_orderkey := tpch:o_orderkey (10:26)
+                                                                        o_custkey := tpch:o_custkey (10:26)
+                                                                        o_comment := tpch:o_comment (10:26)
+                                                                        tpch:o_orderstatus
+                                                                            :: [["F"], ["O"], ["P"]]

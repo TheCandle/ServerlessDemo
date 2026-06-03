@@ -1,0 +1,14 @@
+- Output[PlanNodeId 9][revenue] => [sum:double]
+        revenue := sum (2:1)
+    - Aggregate(FINAL)[PlanNodeId 4] => [sum:double]
+            sum := "presto.default.sum"((sum_4)) (2:1)
+        - LocalExchange[PlanNodeId 396][SINGLE] () => [sum_4:double]
+            - RemoteStreamingExchange[PlanNodeId 402][GATHER - COLUMNAR] => [sum_4:double]
+                - Aggregate(PARTIAL)[PlanNodeId 400] => [sum_4:double]
+                        sum_4 := "presto.default.sum"((expr)) (2:1)
+                    - ScanFilterProject[PlanNodeId 0,355,2][table = TableHandle {connectorId='tpchstandard', connectorHandle='lineitem:sf1.0', layout='Optional[lineitem:sf1.0]'}, filterPredicate = (((l_shipdate) >= (DATE'1997-01-01')) AND ((l_shipdate) < (DATE'1998-01-01'))) AND ((l_discount BETWEEN (DOUBLE'0.03') AND (DOUBLE'0.05')) AND ((l_quantity) < (DOUBLE'25.0'))), projectLocality = LOCAL] => [expr:double]
+                            expr := (l_extendedprice) * (l_discount) (4:2)
+                            l_extendedprice := tpch:l_extendedprice (4:1)
+                            l_quantity := tpch:l_quantity (4:1)
+                            l_shipdate := tpch:l_shipdate (4:1)
+                            l_discount := tpch:l_discount (4:1)

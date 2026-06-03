@@ -1,0 +1,44 @@
+- Output[PlanNodeId 31][avg_yearly] => [expr_23:double]
+        avg_yearly := expr_23 (2:22)
+    - Project[PlanNodeId 27][projectLocality = LOCAL] => [expr_23:double]
+            expr_23 := (sum) / (DOUBLE'7.0') (2:22)
+        - LocalExchange[PlanNodeId 1216][ROUND_ROBIN] () => [sum:double]
+            - Aggregate(FINAL)[PlanNodeId 26] => [sum:double]
+                    sum := "presto.default.sum"((sum_30)) (2:1)
+                - LocalExchange[PlanNodeId 1241][SINGLE] () => [sum_30:double]
+                    - RemoteStreamingExchange[PlanNodeId 1247][GATHER - COLUMNAR] => [sum_30:double]
+                        - Aggregate(PARTIAL)[PlanNodeId 1245] => [sum_30:double]
+                                sum_30 := "presto.default.sum"((l_extendedprice)) (2:1)
+                            - InnerJoin[PlanNodeId 1058][("l_partkey" = "l_partkey_2") AND (l_quantity) < ((DOUBLE'0.2') * (avg))] => [l_extendedprice:double]
+                                    Distribution: PARTITIONED
+                                - RemoteStreamingExchange[PlanNodeId 1140][REPARTITION - COLUMNAR] => [l_partkey:bigint, l_quantity:double, l_extendedprice:double]
+                                        Estimates: {source: CostBasedSourceInfo, rows: 6,001,215 (51.51MB), cpu: 324,065,610.00, memory: 0.00, network: 162,032,805.00}
+                                    - TableScan[PlanNodeId 0][TableHandle {connectorId='tpchstandard', connectorHandle='lineitem:sf1.0', layout='Optional[lineitem:sf1.0]'}] => [l_partkey:bigint, l_quantity:double, l_extendedprice:double]
+                                            Estimates: {source: CostBasedSourceInfo, rows: 6,001,215 (51.51MB), cpu: 162,032,805.00, memory: 0.00, network: 0.00}
+                                            l_extendedprice := tpch:l_extendedprice (4:1)
+                                            l_partkey := tpch:l_partkey (4:1)
+                                            l_quantity := tpch:l_quantity (4:1)
+                                - InnerJoin[PlanNodeId 1057][("l_partkey_2" = "p_partkey")] => [l_partkey_2:bigint, avg:double]
+                                        Distribution: PARTITIONED
+                                    - Aggregate(FINAL)[l_partkey_2][PlanNodeId 390] => [l_partkey_2:bigint, avg:double]
+                                            avg := "presto.default.avg"((avg_31)) (12:7)
+                                        - LocalExchange[PlanNodeId 1257][HASH] (l_partkey_2) => [l_partkey_2:bigint, avg_31:row("field0" double, "field1" bigint)]
+                                            - RemoteStreamingExchange[PlanNodeId 1263][REPARTITION - COLUMNAR] => [l_partkey_2:bigint, avg_31:row("field0" double, "field1" bigint)]
+                                                - Aggregate(PARTIAL)[l_partkey_2][PlanNodeId 1261] => [l_partkey_2:bigint, avg_31:row("field0" double, "field1" bigint)]
+                                                        avg_31 := "presto.default.avg"((l_quantity_5)) (12:7)
+                                                    - TableScan[PlanNodeId 3][TableHandle {connectorId='tpchstandard', connectorHandle='lineitem:sf1.0', layout='Optional[lineitem:sf1.0]'}] => [l_partkey_2:bigint, l_quantity_5:double]
+                                                            Estimates: {source: CostBasedSourceInfo, rows: 6,001,215 (51.51MB), cpu: 108,021,870.00, memory: 0.00, network: 0.00}
+                                                            l_quantity_5 := tpch:l_quantity (14:1)
+                                                            l_partkey_2 := tpch:l_partkey (14:1)
+                                    - LocalExchange[PlanNodeId 1214][HASH] (p_partkey) => [p_partkey:bigint]
+                                            Estimates: {source: CostBasedSourceInfo, rows: 8,000 (70.31kB), cpu: 9,016,000.00, memory: 0.00, network: 72,000.00}
+                                        - RemoteStreamingExchange[PlanNodeId 1139][REPARTITION - COLUMNAR] => [p_partkey:bigint]
+                                                Estimates: {source: CostBasedSourceInfo, rows: 8,000 (70.31kB), cpu: 8,944,000.00, memory: 0.00, network: 72,000.00}
+                                            - ScanFilterProject[PlanNodeId 1,1138,759][table = TableHandle {connectorId='tpchstandard', connectorHandle='part:sf1.0', layout='Optional[part:sf1.0]'}, filterPredicate = (p_brand) = (VARCHAR'Brand#24'), projectLocality = LOCAL] => [p_partkey:bigint]
+                                                    Estimates: {source: CostBasedSourceInfo, rows: 200,000 (1.72MB), cpu: 4,400,000.00, memory: 0.00, network: 0.00}/{source: CostBasedSourceInfo, rows: 8,000 (70.31kB), cpu: 8,800,000.00, memory: 0.00, network: 0.00}/{source: CostBasedSourceInfo, rows: 8,000 (70.31kB), cpu: 8,872,000.00, memory: 0.00, network: 0.00}
+                                                    p_brand := tpch:p_brand (5:1)
+                                                    p_partkey := tpch:p_partkey (5:1)
+                                                    tpch:p_container
+                                                        :: [["JUMBO DRUM"]]
+                                                    tpch:p_type
+                                                        :: [["ECONOMY ANODIZED BRASS", "STANDARD POLISHED TIN"]]

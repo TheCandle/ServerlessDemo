@@ -1,0 +1,40 @@
+utput[PlanNodeId 11][promo_revenue] => [expr_3:double]
+        promo_revenue := expr_3 (6:6)
+    - Project[PlanNodeId 7][projectLocality = LOCAL] => [expr_3:double]
+            expr_3 := ((DOUBLE'100.0') * (sum)) / (sum_2) (6:6)
+        - LocalExchange[PlanNodeId 685][ROUND_ROBIN] () => [sum:double, sum_2:double]
+            - Aggregate(FINAL)[PlanNodeId 6] => [sum:double, sum_2:double]
+                    sum := "presto.default.sum"((sum_7)) (2:10)
+                    sum_2 := "presto.default.sum"((sum_8)) (6:8)
+                - LocalExchange[PlanNodeId 706][SINGLE] () => [sum_8:double, sum_7:double]
+                    - RemoteStreamingExchange[PlanNodeId 712][GATHER - COLUMNAR] => [sum_8:double, sum_7:double]
+                        - Aggregate(PARTIAL)[PlanNodeId 710] => [sum_8:double, sum_7:double]
+                                sum_8 := "presto.default.sum"((expr_1)) (6:8)
+                                sum_7 := "presto.default.sum"((expr)) (2:10)
+                            - Project[PlanNodeId 4][projectLocality = LOCAL] => [expr:double, expr_1:double]
+                                    Estimates: {source: CostBasedSourceInfo, rows: 66,548 (584.90kB), cpu: 416,124,142.33, memory: 1,796,799.42, network: 8,716,745.42}
+                                    expr := SWITCH(BOOLEAN'true', WHEN((SUBSTR(p_type, BIGINT'1', BIGINT'5')) = (VARCHAR'PROMO'), (l_extendedprice) * ((DOUBLE'1.0') - (l_discount))), DOUBLE'0.0') (5:6)
+                                    expr_1 := (l_extendedprice) * ((DOUBLE'1.0') - (l_discount)) (8:2)
+                                - InnerJoin[PlanNodeId 564][("p_partkey" = "l_partkey")] => [p_type:varchar(25), l_extendedprice:double, l_discount:double]
+                                        Estimates: {source: CostBasedSourceInfo, rows: 66,548 (584.90kB), cpu: 414,926,276.04, memory: 1,796,799.42, network: 8,716,745.42}
+                                        Distribution: PARTITIONED
+                                    - RemoteStreamingExchange[PlanNodeId 624][REPARTITION - COLUMNAR] => [p_partkey:bigint, p_type:varchar(25)]
+                                            Estimates: {source: CostBasedSourceInfo, rows: 200,000 (1.72MB), cpu: 13,839,892.00, memory: 0.00, network: 6,919,946.00}
+                                        - TableScan[PlanNodeId 1][TableHandle {connectorId='tpchstandard', connectorHandle='part:sf1.0', layout='Optional[part:sf1.0]'}] => [p_partkey:bigint, p_type:varchar(25)]
+                                                Estimates: {source: CostBasedSourceInfo, rows: 200,000 (1.72MB), cpu: 6,919,946.00, memory: 0.00, network: 0.00}
+                                                p_type := tpch:p_type (9:1)
+                                                    :: [["ECONOMY ANODIZED BRASS", "STANDARD POLISHED TIN"]]
+                                                p_partkey := tpch:p_partkey (9:1)
+                                                tpch:p_container
+                                                    :: [["JUMBO BAG", "WRAP PKG"]]
+                                    - LocalExchange[PlanNodeId 683][HASH] (l_partkey) => [l_partkey:bigint, l_extendedprice:double, l_discount:double]
+                                            Estimates: {source: CostBasedSourceInfo, rows: 66,548 (584.90kB), cpu: 389,468,158.27, memory: 0.00, network: 1,796,799.42}
+                                        - RemoteStreamingExchange[PlanNodeId 625][REPARTITION - COLUMNAR] => [l_partkey:bigint, l_extendedprice:double, l_discount:double]
+                                                Estimates: {source: CostBasedSourceInfo, rows: 66,548 (584.90kB), cpu: 387,671,358.84, memory: 0.00, network: 1,796,799.42}
+                                            - ScanFilterProject[PlanNodeId 0,623,283][table = TableHandle {connectorId='tpchstandard', connectorHandle='lineitem:sf1.0', layout='Optional[lineitem:sf1.0]'}, filterPredicate = ((l_shipdate) >= (DATE'1995-02-01')) AND ((l_shipdate) < (DATE'1995-03-01')), projectLocality = LOCAL] => [l_partkey:bigint, l_extendedprice:double, l_discount:double]
+                                                    Estimates: {source: CostBasedSourceInfo, rows: 6,001,215 (51.51MB), cpu: 192,038,880.00, memory: 0.00, network: 0.00}/{source: CostBasedSourceInfo, rows: 66,548 (584.90kB), cpu: 384,077,760.00, memory: 0.00, network: 0.00}/{source: CostBasedSourceInfo, rows: 66,548 (584.90kB), cpu: 385,874,559.42, memory: 0.00, network: 0.00}
+                                                    l_extendedprice := tpch:l_extendedprice (8:1)
+                                                    l_partkey := tpch:l_partkey (8:1)
+                                                    l_shipdate := tpch:l_shipdate (8:1)
+                                                    l_discount := tpch:l_discount (8:1)
+
