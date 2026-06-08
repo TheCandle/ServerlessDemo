@@ -1,0 +1,187 @@
+[
+   {
+     "Plan": {
+       "Node Type": "Row Adapter",
+       "Startup Cost": 2103377.99,
+       "Total Cost": 2103377.99,
+       "Plan Rows": 452528,
+       "Plan Width": 83,
+       "Plans": [
+         {
+           "Node Type": "Vector Sort",
+           "Parent Relationship": "Outer",
+           "Startup Cost": 2102246.67,
+           "Total Cost": 2103377.99,
+           "Plan Rows": 452528,
+           "Plan Width": 83,
+           "Sort Key": ["(sum((public.partsupp.ps_supplycost * (public.partsupp.ps_availqty)::numeric))) DESC"],
+           "Plans": [
+             {
+               "Node Type": "Row Adapter",
+               "Parent Relationship": "InitPlan",
+               "Subplan Name": "InitPlan 1 (returns $0)",
+               "Startup Cost": 1854833.12,
+               "Total Cost": 1854833.12,
+               "Plan Rows": 1,
+               "Plan Width": 47,
+               "Plans": [
+                 {
+                   "Node Type": "Vector Aggregate",
+                   "Parent Relationship": "Outer",
+                   "Startup Cost": 1854833.10,
+                   "Total Cost": 1854833.12,
+                   "Plan Rows": 1,
+                   "Plan Width": 47,
+                   "Plans": [
+                     {
+                       "Node Type": "Vector Sonic Hash Join",
+                       "Parent Relationship": "Outer",
+                       "Join Type": "Inner",
+                       "Startup Cost": 22191.72,
+                       "Total Cost": 1851439.14,
+                       "Plan Rows": 452528,
+                       "Plan Width": 15,
+                       "Hash Cond": "(public.partsupp.ps_suppkey = public.supplier.s_suppkey)",
+                       "Plans": [
+                         {
+                           "Node Type": "CStore Scan",
+                           "Parent Relationship": "Outer",
+                           "Relation Name": "partsupp",
+                           "Alias": "partsupp",
+                           "Startup Cost": 0.00,
+                           "Total Cost": 1524722.00,
+                           "Plan Rows": 80000000,
+                           "Plan Width": 19
+                         },
+                         {
+                           "Node Type": "Vector Sonic Hash Join",
+                           "Parent Relationship": "Inner",
+                           "Join Type": "Inner",
+                           "Startup Cost": 10.63,
+                           "Total Cost": 22120.70,
+                           "Plan Rows": 5682,
+                           "Plan Width": 4,
+                           "Hash Cond": "(public.supplier.s_nationkey = public.nation.n_nationkey)",
+                           "Plans": [
+                             {
+                               "Node Type": "CStore Scan",
+                               "Parent Relationship": "Outer",
+                               "Relation Name": "supplier",
+                               "Alias": "supplier",
+                               "Startup Cost": 0.00,
+                               "Total Cost": 19547.00,
+                               "Plan Rows": 1000000,
+                               "Plan Width": 8
+                             },
+                             {
+                               "Node Type": "CStore Scan",
+                               "Parent Relationship": "Inner",
+                               "Relation Name": "nation",
+                               "Alias": "nation",
+                               "Startup Cost": 0.00,
+                               "Total Cost": 10.62,
+                               "Plan Rows": 1,
+                               "Plan Width": 4,
+                               "Filter": "(n_name = 'PERU'::bpchar)"
+                             }
+                           ]
+                         }
+                       ]
+                     }
+                   ]
+                 }
+               ]
+             },
+             {
+               "Node Type": "Vector Hash Aggregate",
+               "Parent Relationship": "Outer",
+               "Startup Cost": 197648.29,
+               "Total Cost": 198850.31,
+               "Plan Rows": 452528,
+               "Plan Width": 83,
+               "Group By Key": ["public.partsupp.ps_partkey"],
+               "Filter": "(sum((public.partsupp.ps_supplycost * (public.partsupp.ps_availqty)::numeric)) > $0)",
+               "Plans": [
+                 {
+                   "Node Type": "Vector Streaming(type: LOCAL REDISTRIBUTE dop: 1/64)",
+                   "Parent Relationship": "Outer",
+                   "Startup Cost": 92693.74,
+                   "Total Cost": 197524.55,
+                   "Plan Rows": 452528,
+                   "Plan Width": 19,
+                   "Plans": [
+                     {
+                       "Node Type": "Vector Sonic Hash Join",
+                       "Parent Relationship": "Outer",
+                       "Join Type": "Inner",
+                       "Startup Cost": 92693.74,
+                       "Total Cost": 184275.73,
+                       "Plan Rows": 452528,
+                       "Plan Width": 19,
+                       "Hash Cond": "(public.partsupp.ps_suppkey = public.supplier.s_suppkey)",
+                       "Plans": [
+                         {
+                           "Node Type": "CStore Scan",
+                           "Parent Relationship": "Outer",
+                           "Relation Name": "partsupp",
+                           "Alias": "partsupp",
+                           "Startup Cost": 0.00,
+                           "Total Cost": 86823.78,
+                           "Plan Rows": 80000000,
+                           "Plan Width": 23
+                         },
+                         {
+                           "Node Type": "Vector Streaming(type: BROADCAST dop: 64/1)",
+                           "Parent Relationship": "Inner",
+                           "Startup Cost": 10.63,
+                           "Total Cost": 92622.71,
+                           "Plan Rows": 363648,
+                           "Plan Width": 4,
+                           "Plans": [
+                             {
+                               "Node Type": "Vector Sonic Hash Join",
+                               "Parent Relationship": "Outer",
+                               "Join Type": "Inner",
+                               "Startup Cost": 10.63,
+                               "Total Cost": 22120.70,
+                               "Plan Rows": 5682,
+                               "Plan Width": 4,
+                               "Hash Cond": "(public.supplier.s_nationkey = public.nation.n_nationkey)",
+                               "Plans": [
+                                 {
+                                   "Node Type": "CStore Scan",
+                                   "Parent Relationship": "Outer",
+                                   "Relation Name": "supplier",
+                                   "Alias": "supplier",
+                                   "Startup Cost": 0.00,
+                                   "Total Cost": 19547.00,
+                                   "Plan Rows": 1000000,
+                                   "Plan Width": 8
+                                 },
+                                 {
+                                   "Node Type": "CStore Scan",
+                                   "Parent Relationship": "Inner",
+                                   "Relation Name": "nation",
+                                   "Alias": "nation",
+                                   "Startup Cost": 0.00,
+                                   "Total Cost": 10.62,
+                                   "Plan Rows": 1,
+                                   "Plan Width": 4,
+                                   "Filter": "(n_name = 'PERU'::bpchar)"
+                                 }
+                               ]
+                             }
+                           ]
+                         }
+                       ]
+                     }
+                   ]
+                 }
+               ]
+             }
+           ]
+         }
+       ]
+     }
+   }
+ ]

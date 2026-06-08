@@ -1,0 +1,220 @@
+[                                                                                                                                                                         
+   {                                                                                                                                                                       
+     "Plan": {                                                                                                                                                             
+       "Node Type": "Row Adapter",                                                                                                                                         
+       "Startup Cost": 1522583.81,                                                                                                                                         
+       "Total Cost": 1522583.81,                                                                                                                                           
+       "Plan Rows": 3723891,                                                                                                                                               
+       "Plan Width": 89,                                                                                                                                                   
+       "Output": ["customer.c_name", "customer.c_custkey", "orders.o_orderkey", "orders.o_orderdate", "orders.o_totalprice", "(sum(public.lineitem.l_quantity))"],         
+       "Plans": [                                                                                                                                                          
+         {                                                                                                                                                                 
+           "Node Type": "Vector Sort",                                                                                                                                     
+           "Parent Relationship": "Outer",                                                                                                                                 
+           "Startup Cost": 1513274.08,                                                                                                                                     
+           "Total Cost": 1522583.81,                                                                                                                                       
+           "Plan Rows": 3723891,                                                                                                                                           
+           "Plan Width": 89,                                                                                                                                               
+           "Output": ["customer.c_name", "customer.c_custkey", "orders.o_orderkey", "orders.o_orderdate", "orders.o_totalprice", "(sum(public.lineitem.l_quantity))"],     
+           "Sort Key": ["orders.o_totalprice DESC", "orders.o_orderdate"],                                                                                                 
+           "Plans": [                                                                                                                                                      
+             {                                                                                                                                                             
+               "Node Type": "Vector Streaming(type: LOCAL GATHER dop: 1/64)",                                                                                              
+               "Parent Relationship": "Outer",                                                                                                                             
+               "Startup Cost": 1052843.40,                                                                                                                                 
+               "Total Cost": 1106841.55,                                                                                                                                   
+               "Plan Rows": 3723891,                                                                                                                                       
+               "Plan Width": 89,                                                                                                                                           
+               "Output": ["customer.c_name", "customer.c_custkey", "orders.o_orderkey", "orders.o_orderdate", "orders.o_totalprice", "(sum(public.lineitem.l_quantity))"], 
+               "Plans": [                                                                                                                                                  
+                 {                                                                                                                                                         
+                   "Node Type": "Vector Sonic Hash Aggregate",                                                                                                             
+                   "Parent Relationship": "Outer",                                                                                                                         
+                   "Startup Cost": 1052843.40,                                                                                                                             
+                   "Total Cost": 1053425.26,                                                                                                                               
+                   "Plan Rows": 3723891,                                                                                                                                   
+                   "Plan Width": 89,                                                                                                                                       
+                   "Output": ["customer.c_name", "customer.c_custkey", "orders.o_orderkey", "orders.o_orderdate", "orders.o_totalprice", "sum(public.lineitem.l_quantity)"],
+                   "Group By Key": ["orders.o_totalprice", "orders.o_orderdate", "customer.c_name", "customer.c_custkey", "orders.o_orderkey"],                            
+                   "Plans": [                                                                                                                                              
+                     {                                                                                                                                                     
+                       "Node Type": "Vector Sonic Hash Join",                                                                                                              
+                       "Parent Relationship": "Outer",                                                                                                                     
+                       "Join Type": "Inner",                                                                                                                               
+                       "Startup Cost": 609429.42,                                                                                                                          
+                       "Total Cost": 1051970.61,                                                                                                                           
+                       "Plan Rows": 3723891,                                                                                                                               
+                       "Plan Width": 57,                                                                                                                                   
+                       "Output": ["customer.c_name", "customer.c_custkey", "orders.o_orderkey", "orders.o_orderdate", "orders.o_totalprice", "public.lineitem.l_quantity"],
+                       "Hash Cond": "(orders.o_custkey = customer.c_custkey)",                                                                                             
+                       "Plans": [                                                                                                                                          
+                         {                                                                                                                                                 
+                           "Node Type": "Vector Streaming(type: LOCAL REDISTRIBUTE dop: 64/64)",                                                                           
+                           "Parent Relationship": "Outer",                                                                                                                 
+                           "Startup Cost": 570223.85,                                                                                                                      
+                           "Total Cost": 1011964.99,                                                                                                                       
+                           "Plan Rows": 3723891,                                                                                                                           
+                           "Plan Width": 38,                                                                                                                               
+                           "Output": ["orders.o_orderkey", "orders.o_orderdate", "orders.o_totalprice", "orders.o_custkey", "public.lineitem.l_quantity"],                 
+                           "Distribute Key": ["orders.o_custkey"],                                                                                                         
+                           "Plans": [                                                                                                                                      
+                             {                                                                                                                                             
+                               "Node Type": "Vector Sonic Hash Join",                                                                                                      
+                               "Parent Relationship": "Outer",                                                                                                             
+                               "Join Type": "Inner",                                                                                                                       
+                               "Startup Cost": 570223.85,                                                                                                                  
+                               "Total Cost": 945437.47,                                                                                                                    
+                               "Plan Rows": 3723891,                                                                                                                       
+                               "Plan Width": 38,                                                                                                                           
+                               "Output": ["orders.o_orderkey", "orders.o_orderdate", "orders.o_totalprice", "orders.o_custkey", "public.lineitem.l_quantity"],             
+                               "Hash Cond": "(public.lineitem.l_orderkey = orders.o_orderkey)",                                                                            
+                               "Plans": [                                                                                                                                  
+                                 {                                                                                                                                         
+                                   "Node Type": "CStore Scan",                                                                                                             
+                                   "Parent Relationship": "Outer",                                                                                                         
+                                   "Relation Name": "lineitem",                                                                                                            
+                                   "Schema": "public",                                                                                                                     
+                                   "Alias": "lineitem",                                                                                                                    
+                                   "Startup Cost": 0.00,                                                                                                                   
+                                   "Total Cost": 246299.23,                                                                                                                
+                                   "Plan Rows": 600037902,                                                                                                                 
+                                   "Plan Width": 15,                                                                                                                       
+                                   "Output": ["public.lineitem.l_quantity", "public.lineitem.l_orderkey"]                                                                  
+                                 },                                                                                                                                        
+                                 {                                                                                                                                         
+                                   "Node Type": "Vector Streaming(type: BROADCAST dop: 64/64)",                                                                            
+                                   "Parent Relationship": "Inner",                                                                                                         
+                                   "Startup Cost": 448130.39,                                                                                                              
+                                   "Total Cost": 558587.42,                                                                                                                
+                                   "Plan Rows": 59578496,                                                                                                                  
+                                   "Plan Width": 31,                                                                                                                       
+                                   "Output": ["orders.o_orderkey", "orders.o_orderdate", "orders.o_totalprice", "orders.o_custkey", "public.lineitem.l_orderkey"],         
+                                   "Plans": [                                                                                                                              
+                                     {                                                                                                                                     
+                                       "Node Type": "Vector Hash Join",                                                                                                    
+                                       "Parent Relationship": "Outer",                                                                                                     
+                                       "Join Type": "Right Semi",                                                                                                          
+                                       "Startup Cost": 448130.39,                                                                                                          
+                                       "Total Cost": 457769.04,                                                                                                            
+                                       "Plan Rows": 930914,                                                                                                                
+                                       "Plan Width": 31,                                                                                                                   
+                                       "Output": ["orders.o_orderkey", "orders.o_orderdate", "orders.o_totalprice", "orders.o_custkey", "public.lineitem.l_orderkey"],     
+                                       "Hash Cond": "(public.lineitem.l_orderkey = orders.o_orderkey)",                                                                    
+                                       "Plans": [                                                                                                                          
+                                         {                                                                                                                                 
+                                           "Node Type": "Vector Sonic Hash Aggregate",                                                                                     
+                                           "Parent Relationship": "Outer",                                                                                                 
+                                           "Startup Cost": 335704.69,                                                                                                      
+                                           "Total Cost": 335850.15,                                                                                                        
+                                           "Plan Rows": 930914,                                                                                                            
+                                           "Plan Width": 47,                                                                                                               
+                                           "Output": ["public.lineitem.l_orderkey"],                                                                                       
+                                           "Group By Key": ["public.lineitem.l_orderkey"],                                                                                 
+                                           "Filter": "(sum((sum(public.lineitem.l_quantity))) > 314::numeric)",                                                            
+                                           "Plans": [                                                                                                                      
+                                             {                                                                                                                             
+                                               "Node Type": "Vector Streaming(type: LOCAL REDISTRIBUTE dop: 64/64)",                                                       
+                                               "Parent Relationship": "Outer",                                                                                             
+                                               "Startup Cost": 293177.19,                                                                                                  
+                                               "Total Cost": 335631.96,                                                                                                    
+                                               "Plan Rows": 930914,                                                                                                        
+                                               "Plan Width": 47,                                                                                                           
+                                               "Output": ["public.lineitem.l_orderkey", "(sum(public.lineitem.l_quantity))"],                                              
+                                               "Distribute Key": ["public.lineitem.l_orderkey"],                                                                           
+                                               "Plans": [                                                                                                                  
+                                                 {                                                                                                                         
+                                                   "Node Type": "Vector Sonic Hash Aggregate",                                                                             
+                                                   "Parent Relationship": "Outer",                                                                                         
+                                                   "Startup Cost": 293177.19,                                                                                              
+                                                   "Total Cost": 295649.93,                                                                                                
+                                                   "Plan Rows": 930914,                                                                                                    
+                                                   "Plan Width": 47,                                                                                                       
+                                                   "Output": ["public.lineitem.l_orderkey", "sum(public.lineitem.l_quantity)"],                                            
+                                                   "Group By Key": ["public.lineitem.l_orderkey"],                                                                         
+                                                   "Plans": [                                                                                                              
+                                                     {                                                                                                                     
+                                                       "Node Type": "CStore Scan",                                                                                         
+                                                       "Parent Relationship": "Outer",                                                                                     
+                                                       "Relation Name": "lineitem",                                                                                        
+                                                       "Schema": "public",                                                                                                 
+                                                       "Alias": "lineitem",                                                                                                
+                                                       "Startup Cost": 0.00,                                                                                               
+                                                       "Total Cost": 246299.23,                                                                                            
+                                                       "Plan Rows": 600037902,                                                                                             
+                                                       "Plan Width": 15,                                                                                                   
+                                                       "Output": ["public.lineitem.l_orderkey", "public.lineitem.l_quantity"]                                              
+                                                     }                                                                                                                     
+                                                   ]                                                                                                                       
+                                                 }                                                                                                                         
+                                               ]                                                                                                                           
+                                             }                                                                                                                             
+                                           ]                                                                                                                               
+                                         },                                                                                                                                
+                                         {                                                                                                                                 
+                                           "Node Type": "Vector Streaming(type: LOCAL REDISTRIBUTE dop: 64/64)",                                                           
+                                           "Parent Relationship": "Inner",                                                                                                 
+                                           "Startup Cost": 0.00,                                                                                                           
+                                           "Total Cost": 303011.72,                                                                                                        
+                                           "Plan Rows": 150000000,                                                                                                         
+                                           "Plan Width": 27,                                                                                                               
+                                           "Output": ["orders.o_orderkey", "orders.o_orderdate", "orders.o_totalprice", "orders.o_custkey"],                               
+                                           "Distribute Key": ["orders.o_orderkey"],                                                                                        
+                                           "Plans": [                                                                                                                      
+                                             {                                                                                                                             
+                                               "Node Type": "CStore Scan",                                                                                                 
+                                               "Parent Relationship": "Outer",                                                                                             
+                                               "Relation Name": "orders",                                                                                                  
+                                               "Schema": "public",                                                                                                         
+                                               "Alias": "orders",                                                                                                          
+                                               "Startup Cost": 0.00,                                                                                                       
+                                               "Total Cost": 97921.88,                                                                                                     
+                                               "Plan Rows": 150000000,                                                                                                     
+                                               "Plan Width": 27,                                                                                                           
+                                               "Output": ["orders.o_orderkey", "orders.o_orderdate", "orders.o_totalprice", "orders.o_custkey"]                            
+                                             }                                                                                                                             
+                                           ]                                                                                                                               
+                                         }                                                                                                                                 
+                                       ]                                                                                                                                   
+                                     }                                                                                                                                     
+                                   ]                                                                                                                                       
+                                 }                                                                                                                                         
+                               ]                                                                                                                                           
+                             }                                                                                                                                             
+                           ]                                                                                                                                               
+                         },                                                                                                                                                
+                         {                                                                                                                                                 
+                           "Node Type": "Vector Streaming(type: LOCAL REDISTRIBUTE dop: 64/64)",                                                                           
+                           "Parent Relationship": "Inner",                                                                                                                 
+                           "Startup Cost": 0.00,                                                                                                                           
+                           "Total Cost": 145103.52,                                                                                                                        
+                           "Plan Rows": 15000000,                                                                                                                          
+                           "Plan Width": 23,                                                                                                                               
+                           "Output": ["customer.c_name", "customer.c_custkey"],                                                                                            
+                           "Distribute Key": ["customer.c_custkey"],                                                                                                       
+                           "Plans": [                                                                                                                                      
+                             {                                                                                                                                             
+                               "Node Type": "CStore Scan",                                                                                                                 
+                               "Parent Relationship": "Outer",                                                                                                             
+                               "Relation Name": "customer",                                                                                                                
+                               "Schema": "public",                                                                                                                         
+                               "Alias": "customer",                                                                                                                        
+                               "Startup Cost": 0.00,                                                                                                                       
+                               "Total Cost": 67894.53,                                                                                                                     
+                               "Plan Rows": 15000000,                                                                                                                      
+                               "Plan Width": 23,                                                                                                                           
+                               "Output": ["customer.c_name", "customer.c_custkey"]                                                                                         
+                             }                                                                                                                                             
+                           ]                                                                                                                                               
+                         }                                                                                                                                                 
+                       ]                                                                                                                                                   
+                     }                                                                                                                                                     
+                   ]                                                                                                                                                       
+                 }                                                                                                                                                         
+               ]                                                                                                                                                           
+             }                                                                                                                                                             
+           ]                                                                                                                                                               
+         }                                                                                                                                                                 
+       ]                                                                                                                                                                   
+     }                                                                                                                                                                     
+   }                                                                                                                                                                       
+ ]

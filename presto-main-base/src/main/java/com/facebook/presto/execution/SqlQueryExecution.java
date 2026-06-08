@@ -33,6 +33,8 @@ import com.facebook.presto.execution.buffer.OutputBuffers.OutputBufferId;
 import com.facebook.presto.execution.scheduler.ExecutionPolicy;
 import com.facebook.presto.execution.scheduler.SectionExecutionFactory;
 import com.facebook.presto.execution.scheduler.SplitSchedulerStats;
+import com.facebook.presto.execution.planadapter.AdapterContext;
+import com.facebook.presto.execution.planadapter.OpengaussPlanAdapter;
 import com.facebook.presto.execution.scheduler.SqlQueryScheduler;
 import com.facebook.presto.execution.scheduler.SqlQuerySchedulerInterface;
 import com.facebook.presto.memory.VersionedMemoryPoolId;
@@ -945,56 +947,77 @@ public class SqlQueryExecution
 
             PlanNode planNode;
             TpchPlanTree tpchPlanTree = new TpchPlanTree(analyzerContext, metadata, idAllocator, stateMachine);
-            
-            switch (this.query) {
-                case "select 1":
-                planNode = tpchPlanTree.getQ1();
-                break;
-                case "select 6":
-                planNode = tpchPlanTree.getQ6();
-                break;
-                case "select 12":
-                planNode = tpchPlanTree.getQ12();
-                break;
-                case "select 13":
-                planNode = tpchPlanTree.getQ13();
-                break;
-                case "select 14":
-                planNode = tpchPlanTree.getQ14();
-                break;
-                case "select 17":
-                planNode = tpchPlanTree.getQ17();
-                break;
-                case "select 18":
-                planNode = tpchPlanTree.getQ18();
-                break;
-                case "select 19":
-                planNode = tpchPlanTree.getQ19();
-                break;
-                default:
-                planNode = stateMachine.getSession()
-                        .getRuntimeStats()
-                        .recordWallAndCpuTime(
-                                LOGICAL_PLANNER_TIME_NANOS,
-                                () -> queryAnalyzer.plan(this.analyzerContext, queryAnalysis));    
+            if (isOpengaussExternalPlanEnabled()) {
+                AdapterContext adapterContext = new AdapterContext(
+                        stateMachine.getSession(),
+                        metadata,
+                        idAllocator,
+                        analyzerContext.getVariableAllocator(),
+                        getOpengaussPlanMappings(),
+                        metadata.getFunctionAndTypeManager(),
+                        SqlQueryExecution.class.getClassLoader());
+                // planNode = new OpengaussPlanAdapter().adapt(getQueryId().toString(), adapterContext);
+                planNode = new OpengaussPlanAdapter().adapt("12", adapterContext);
+            }
+            else {
+                switch (this.query) {
+                    case "select 1":
+                    planNode = tpchPlanTree.getQ1();
+                    break;
+                    case "select 6":
+                    planNode = tpchPlanTree.getQ6();
+                    break;
+                    case "select 12":
+                    planNode = tpchPlanTree.getQ12();
+                    break;
+                    case "select 13":
+                    planNode = tpchPlanTree.getQ13();
+                    break;
+                    case "select 14":
+                    planNode = tpchPlanTree.getQ14();
+                    break;
+                    case "select 17":
+                    planNode = tpchPlanTree.getQ17();
+                    break;
+                    case "select 18":
+                    planNode = tpchPlanTree.getQ18();
+                    break;
+                    case "select 19":
+                    planNode = tpchPlanTree.getQ19();
+                    break;
+                    default:
+                    planNode = stateMachine.getSession()
+                            .getRuntimeStats()
+                            .recordWallAndCpuTime(
+                                    LOGICAL_PLANNER_TIME_NANOS,
+                                    () -> queryAnalyzer.plan(this.analyzerContext, queryAnalysis));    
+                }
             }
             
 
-            Optimizer optimizer = new Optimizer(
-                    stateMachine.getSession(),
-                    metadata,
-                    planOptimizers,
-                    planChecker,
-                    analyzerContext.getVariableAllocator(),
-                    idAllocator,
-                    stateMachine.getWarningCollector(),
-                    statsCalculator,
-                    costCalculator,
-                    false);
+            Plan plan;
+            if (isOpengaussExternalPlanEnabled()) {
+                plan = getSession().getRuntimeStats().recordWallAndCpuTime(
+                        OPTIMIZER_TIME_NANOS,
+                        () -> new Plan(planNode, com.facebook.presto.sql.planner.TypeProvider.fromVariables(planNode.getOutputVariables()), com.facebook.presto.cost.StatsAndCosts.empty()));
+            }
+            else {
+                Optimizer optimizer = new Optimizer(
+                        stateMachine.getSession(),
+                        metadata,
+                        planOptimizers,
+                        planChecker,
+                        analyzerContext.getVariableAllocator(),
+                        idAllocator,
+                        stateMachine.getWarningCollector(),
+                        statsCalculator,
+                        costCalculator,
+                        false);
 
-            Plan plan = getSession().getRuntimeStats().recordWallAndCpuTime(
-                    OPTIMIZER_TIME_NANOS,
-                    () -> optimizer.validateAndOptimizePlan(planNode, OPTIMIZED_AND_VALIDATED));
+                plan = getSession().getRuntimeStats().recordWallAndCpuTime(
+                        OPTIMIZER_TIME_NANOS,
+                        () -> optimizer.validateAndOptimizePlan(planNode, OPTIMIZED_AND_VALIDATED));
+            }
 
             if (LOG.isInfoEnabled()) {
                 LOG.info("Optimized physical plan for query {}:\n{}",
@@ -1261,6 +1284,21 @@ public class SqlQueryExecution
     public QueryState getState()
     {
         return stateMachine.getQueryState();
+    }
+
+    private boolean isOpengaussExternalPlanEnabled()
+    {
+        return true;
+    }
+
+    private Map<String, String> getOpengaussPlanMappings()
+    {
+        Map<String, String> mappings = new HashMap<>();
+        for (int i = 1; i <= 22; i++) {
+            mappings.put(String.valueOf(i), String.format("og-plan/q%d_r1.json", i));
+            mappings.put("q" + i, String.format("og-plan/q%d_r1.json", i));
+        }
+        return mappings;
     }
 
     /**

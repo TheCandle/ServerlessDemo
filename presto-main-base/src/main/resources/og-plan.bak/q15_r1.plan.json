@@ -1,0 +1,144 @@
+[
+   {
+     "Plan": {
+       "Node Type": "Row Adapter",
+       "Startup Cost": 15285168.46,
+       "Total Cost": 15285168.46,
+       "Plan Rows": 36538,
+       "Plan Width": 103,
+       "Plans": [
+         {
+           "Node Type": "Vector Sort",
+           "Parent Relationship": "Outer",
+           "Startup Cost": 15285077.11,
+           "Total Cost": 15285168.46,
+           "Plan Rows": 36538,
+           "Plan Width": 103,
+           "Sort Key": ["supplier.s_suppkey"],
+           "Plans": [
+             {
+               "Node Type": "Row Adapter",
+               "Parent Relationship": "InitPlan",
+               "Subplan Name": "InitPlan 1 (returns $0)",
+               "Startup Cost": 14961405.03,
+               "Total Cost": 14961405.03,
+               "Plan Rows": 1,
+               "Plan Width": 64,
+               "Plans": [
+                 {
+                   "Node Type": "Vector Aggregate",
+                   "Parent Relationship": "Outer",
+                   "Startup Cost": 14961405.02,
+                   "Total Cost": 14961405.03,
+                   "Plan Rows": 1,
+                   "Plan Width": 64,
+                   "Plans": [
+                     {
+                       "Node Type": "Vector Sonic Hash Aggregate",
+                       "Parent Relationship": "Outer",
+                       "Startup Cost": 14960582.91,
+                       "Total Cost": 14960948.29,
+                       "Plan Rows": 36538,
+                       "Plan Width": 58,
+                       "Group By Key": ["public.lineitem.l_suppkey"],
+                       "Plans": [
+                         {
+                           "Node Type": "CStore Scan",
+                           "Parent Relationship": "Outer",
+                           "Relation Name": "lineitem",
+                           "Alias": "lineitem",
+                           "Startup Cost": 0.00,
+                           "Total Cost": 14731340.41,
+                           "Plan Rows": 22924250,
+                           "Plan Width": 26,
+                           "Filter": "((l_shipdate >= '1997-09-01 00:00:00'::timestamp(0) without time zone) AND (l_shipdate < '1997-12-01 00:00:00'::timestamp without time zone))"
+                         }
+                       ]
+                     }
+                   ]
+                 }
+               ]
+             },
+             {
+               "Node Type": "Vector Sonic Hash Join",
+               "Parent Relationship": "Outer",
+               "Join Type": "Inner",
+               "Startup Cost": 319275.77,
+               "Total Cost": 320903.03,
+               "Plan Rows": 36538,
+               "Plan Width": 103,
+               "Hash Cond": "(revenue0.supplier_no = supplier.s_suppkey)",
+               "Plans": [
+                 {
+                   "Node Type": "Vector Subquery Scan",
+                   "Parent Relationship": "Outer",
+                   "Alias": "revenue0",
+                   "Startup Cost": 301889.02,
+                   "Total Cost": 302260.11,
+                   "Plan Rows": 36538,
+                   "Plan Width": 36,
+                   "Plans": [
+                     {
+                       "Node Type": "Vector Hash Aggregate",
+                       "Parent Relationship": "Subquery",
+                       "Startup Cost": 301889.02,
+                       "Total Cost": 301894.73,
+                       "Plan Rows": 36538,
+                       "Plan Width": 90,
+                       "Group By Key": ["public.lineitem.l_suppkey"],
+                       "Filter": "(sum((sum((public.lineitem.l_extendedprice * (1::numeric - public.lineitem.l_discount))))) = $0)",
+                       "Plans": [
+                         {
+                           "Node Type": "Vector Streaming(type: LOCAL REDISTRIBUTE dop: 1/64)",
+                           "Parent Relationship": "Outer",
+                           "Startup Cost": 299445.54,
+                           "Total Cost": 301879.03,
+                           "Plan Rows": 36538,
+                           "Plan Width": 90,
+                           "Plans": [
+                             {
+                               "Node Type": "Vector Hash Aggregate",
+                               "Parent Relationship": "Outer",
+                               "Startup Cost": 299445.54,
+                               "Total Cost": 299542.60,
+                               "Plan Rows": 36538,
+                               "Plan Width": 90,
+                               "Group By Key": ["public.lineitem.l_suppkey"],
+                               "Plans": [
+                                 {
+                                   "Node Type": "CStore Scan",
+                                   "Parent Relationship": "Outer",
+                                   "Relation Name": "lineitem",
+                                   "Alias": "lineitem",
+                                   "Startup Cost": 0.00,
+                                   "Total Cost": 293177.19,
+                                   "Plan Rows": 22924250,
+                                   "Plan Width": 26,
+                                   "Filter": "((l_shipdate >= '1997-09-01 00:00:00'::timestamp(0) without time zone) AND (l_shipdate < '1997-12-01 00:00:00'::timestamp without time zone))"
+                                 }
+                               ]
+                             }
+                           ]
+                         }
+                       ]
+                     }
+                   ]
+                 },
+                 {
+                   "Node Type": "CStore Scan",
+                   "Parent Relationship": "Inner",
+                   "Relation Name": "supplier",
+                   "Alias": "supplier",
+                   "Startup Cost": 0.00,
+                   "Total Cost": 19547.00,
+                   "Plan Rows": 1000000,
+                   "Plan Width": 71
+                 }
+               ]
+             }
+           ]
+         }
+       ]
+     }
+   }
+ ]

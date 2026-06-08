@@ -1,0 +1,109 @@
+[
+   {
+     "Plan": {
+       "Node Type": "Row Adapter",
+       "Startup Cost": 678407.46,
+       "Total Cost": 678407.46,
+       "Plan Rows": 1,
+       "Plan Width": 43,
+       "Plans": [
+         {
+           "Node Type": "Vector Sort",
+           "Parent Relationship": "Outer",
+           "Startup Cost": 678407.46,
+           "Total Cost": 678407.46,
+           "Plan Rows": 1,
+           "Plan Width": 43,
+           "Sort Key": ["lineitem.l_shipmode"],
+           "Plans": [
+             {
+               "Node Type": "Vector Streaming(type: LOCAL GATHER dop: 1/64)",
+               "Parent Relationship": "Outer",
+               "Startup Cost": 678407.44,
+               "Total Cost": 678407.45,
+               "Plan Rows": 1,
+               "Plan Width": 43,
+               "Plans": [
+                 {
+                   "Node Type": "Vector Hash Aggregate",
+                   "Parent Relationship": "Outer",
+                   "Startup Cost": 678407.44,
+                   "Total Cost": 678407.44,
+                   "Plan Rows": 1,
+                   "Plan Width": 43,
+                   "Group By Key": ["lineitem.l_shipmode"],
+                   "Plans": [
+                     {
+                       "Node Type": "Vector Streaming(type: LOCAL REDISTRIBUTE dop: 64/64)",
+                       "Parent Relationship": "Outer",
+                       "Startup Cost": 678407.42,
+                       "Total Cost": 678407.44,
+                       "Plan Rows": 1,
+                       "Plan Width": 43,
+                       "Plans": [
+                         {
+                           "Node Type": "Vector Hash Aggregate",
+                           "Parent Relationship": "Outer",
+                           "Startup Cost": 678407.42,
+                           "Total Cost": 678407.42,
+                           "Plan Rows": 1,
+                           "Plan Width": 43,
+                           "Group By Key": ["lineitem.l_shipmode"],
+                           "Plans": [
+                             {
+                               "Node Type": "Vector Sonic Hash Join",
+                               "Parent Relationship": "Outer",
+                               "Join Type": "Inner",
+                               "Startup Cost": 127218.75,
+                               "Total Cost": 677646.42,
+                               "Plan Rows": 2783069,
+                               "Plan Width": 27,
+                               "Hash Cond": "(lineitem.l_orderkey = orders.o_orderkey)",
+                               "Plans": [
+                                 {
+                                   "Node Type": "Vector Streaming(type: BROADCAST dop: 64/64)",
+                                   "Parent Relationship": "Outer",
+                                   "Startup Cost": 0.00,
+                                   "Total Cost": 539556.31,
+                                   "Plan Rows": 178116416,
+                                   "Plan Width": 15,
+                                   "Plans": [
+                                     {
+                                       "Node Type": "CStore Scan",
+                                       "Parent Relationship": "Outer",
+                                       "Relation Name": "lineitem",
+                                       "Alias": "lineitem",
+                                       "Startup Cost": 0.00,
+                                       "Total Cost": 363494.14,
+                                       "Plan Rows": 2783069,
+                                       "Plan Width": 15,
+                                       "Filter": "((l_shipmode = ANY ('{RAIL,MAIL}'::bpchar[])) AND (l_commitdate < l_receiptdate) AND (l_shipdate < l_commitdate) AND (l_receiptdate >= '1995-01-01 00:00:00'::timestamp(0) without time zone) AND (l_receiptdate < '1996-01-01 00:00:00'::timestamp without time zone))"
+                                     }
+                                   ]
+                                 },
+                                 {
+                                   "Node Type": "CStore Scan",
+                                   "Parent Relationship": "Inner",
+                                   "Relation Name": "orders",
+                                   "Alias": "orders",
+                                   "Startup Cost": 0.00,
+                                   "Total Cost": 97921.88,
+                                   "Plan Rows": 150000000,
+                                   "Plan Width": 20
+                                 }
+                               ]
+                             }
+                           ]
+                         }
+                       ]
+                     }
+                   ]
+                 }
+               ]
+             }
+           ]
+         }
+       ]
+     }
+   }
+ ]

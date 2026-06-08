@@ -1,0 +1,152 @@
+[
+   {
+     "Plan": {
+       "Node Type": "Row Adapter",
+       "Startup Cost": 2701724.97,
+       "Total Cost": 2701724.97,
+       "Plan Rows": 28197,
+       "Plan Width": 56,
+       "Plans": [
+         {
+           "Node Type": "Vector Sort",
+           "Parent Relationship": "Outer",
+           "Startup Cost": 2701654.48,
+           "Total Cost": 2701724.97,
+           "Plan Rows": 28197,
+           "Plan Width": 56,
+           "Sort Key": ["(count(partsupp.ps_suppkey)) DESC", "part.p_brand", "part.p_type", "part.p_size"],
+           "Plans": [
+             {
+               "Node Type": "Vector Streaming(type: LOCAL GATHER dop: 1/64)",
+               "Parent Relationship": "Outer",
+               "Startup Cost": 2699311.36,
+               "Total Cost": 2699570.26,
+               "Plan Rows": 28197,
+               "Plan Width": 56,
+               "Plans": [
+                 {
+                   "Node Type": "Vector Sonic Hash Aggregate",
+                   "Parent Relationship": "Outer",
+                   "Startup Cost": 2699311.36,
+                   "Total Cost": 2699315.77,
+                   "Plan Rows": 28197,
+                   "Plan Width": 56,
+                   "Group By Key": ["part.p_brand", "part.p_type", "part.p_size"],
+                   "Plans": [
+                     {
+                       "Node Type": "Vector Sonic Hash Aggregate",
+                       "Parent Relationship": "Outer",
+                       "Startup Cost": 2681947.77,
+                       "Total Cost": 2690629.57,
+                       "Plan Rows": 55563483,
+                       "Plan Width": 48,
+                       "Group By Key": ["part.p_brand", "part.p_type", "part.p_size", "partsupp.ps_suppkey"],
+                       "Plans": [
+                         {
+                           "Node Type": "Vector Streaming(type: LOCAL REDISTRIBUTE dop: 64/64)",
+                           "Parent Relationship": "Outer",
+                           "Startup Cost": 224772.85,
+                           "Total Cost": 2671095.53,
+                           "Plan Rows": 55563483,
+                           "Plan Width": 40,
+                           "Plans": [
+                             {
+                               "Node Type": "Vector Hash Join",
+                               "Parent Relationship": "Outer",
+                               "Join Type": "Anti",
+                               "Startup Cost": 224772.85,
+                               "Total Cost": 474601.59,
+                               "Plan Rows": 55563483,
+                               "Plan Width": 40,
+                               "Hash Cond": "(partsupp.ps_suppkey = supplier.s_suppkey)",
+                               "Plans": [
+                                 {
+                                   "Node Type": "Vector Sonic Hash Join",
+                                   "Parent Relationship": "Outer",
+                                   "Join Type": "Inner",
+                                   "Startup Cost": 139592.57,
+                                   "Total Cost": 378567.76,
+                                   "Plan Rows": 55569015,
+                                   "Plan Width": 40,
+                                   "Hash Cond": "(partsupp.ps_partkey = part.p_partkey)",
+                                   "Plans": [
+                                     {
+                                       "Node Type": "Vector Streaming(type: LOCAL REDISTRIBUTE dop: 64/64)",
+                                       "Parent Relationship": "Outer",
+                                       "Startup Cost": 0.00,
+                                       "Total Cost": 225605.03,
+                                       "Plan Rows": 80000000,
+                                       "Plan Width": 8,
+                                       "Plans": [
+                                         {
+                                           "Node Type": "CStore Scan",
+                                           "Parent Relationship": "Outer",
+                                           "Relation Name": "partsupp",
+                                           "Alias": "partsupp",
+                                           "Startup Cost": 0.00,
+                                           "Total Cost": 86823.78,
+                                           "Plan Rows": 80000000,
+                                           "Plan Width": 8
+                                         }
+                                       ]
+                                     },
+                                     {
+                                       "Node Type": "Vector Streaming(type: LOCAL REDISTRIBUTE dop: 64/64)",
+                                       "Parent Relationship": "Inner",
+                                       "Startup Cost": 0.00,
+                                       "Total Cost": 139005.14,
+                                       "Plan Rows": 3007625,
+                                       "Plan Width": 40,
+                                       "Plans": [
+                                         {
+                                           "Node Type": "CStore Scan",
+                                           "Parent Relationship": "Outer",
+                                           "Relation Name": "part",
+                                           "Alias": "part",
+                                           "Startup Cost": 0.00,
+                                           "Total Cost": 73156.12,
+                                           "Plan Rows": 3007625,
+                                           "Plan Width": 40,
+                                           "Filter": "((p_brand <> 'Brand#12'::bpchar) AND ((p_type)::text !~~ 'LARGE BRUSHED%'::text) AND (p_size = ANY ('{39,12,43,8,42,1,7,14}'::integer[])))"
+                                         }
+                                       ]
+                                     }
+                                   ]
+                                 },
+                                 {
+                                   "Node Type": "Vector Streaming(type: BROADCAST dop: 64/1)",
+                                   "Parent Relationship": "Inner",
+                                   "Startup Cost": 0.00,
+                                   "Total Cost": 85179.03,
+                                   "Plan Rows": 6400,
+                                   "Plan Width": 4,
+                                   "Plans": [
+                                     {
+                                       "Node Type": "CStore Scan",
+                                       "Parent Relationship": "Outer",
+                                       "Relation Name": "supplier",
+                                       "Alias": "supplier",
+                                       "Startup Cost": 0.00,
+                                       "Total Cost": 22047.00,
+                                       "Plan Rows": 100,
+                                       "Plan Width": 4,
+                                       "Filter": "((s_comment)::text ~~ '%Customer%Complaints%'::text)"
+                                     }
+                                   ]
+                                 }
+                               ]
+                             }
+                           ]
+                         }
+                       ]
+                     }
+                   ]
+                 }
+               ]
+             }
+           ]
+         }
+       ]
+     }
+   }
+ ]

@@ -1,0 +1,124 @@
+[
+   {
+     "Plan": {
+       "Node Type": "Row Adapter",
+       "Startup Cost": 25279041.76,
+       "Total Cost": 25279041.76,
+       "Plan Rows": 1,
+       "Plan Width": 43,
+       "Plans": [
+         {
+           "Node Type": "Vector Aggregate",
+           "Parent Relationship": "Outer",
+           "Startup Cost": 25279041.75,
+           "Total Cost": 25279041.76,
+           "Plan Rows": 1,
+           "Plan Width": 43,
+           "Plans": [
+             {
+               "Node Type": "Vector Sonic Hash Join",
+               "Parent Relationship": "Outer",
+               "Join Type": "Inner",
+               "Startup Cost": 12750622.98,
+               "Total Cost": 25278697.75,
+               "Plan Rows": 137598,
+               "Plan Width": 11,
+               "Hash Cond": "(public.part.p_partkey = subquery.\"?column?\")",
+               "Join Filter": "(public.lineitem.l_quantity < (.2 * subquery.\"?column?\"))",
+               "Plans": [
+                 {
+                   "Node Type": "Vector Sonic Hash Join",
+                   "Parent Relationship": "Outer",
+                   "Join Type": "Inner",
+                   "Startup Cost": 449995.97,
+                   "Total Cost": 12959174.74,
+                   "Plan Rows": 454151,
+                   "Plan Width": 30,
+                   "Hash Cond": "(public.lineitem.l_partkey = public.part.p_partkey)",
+                   "Plans": [
+                     {
+                       "Node Type": "CStore Scan",
+                       "Parent Relationship": "Outer",
+                       "Relation Name": "lineitem",
+                       "Alias": "lineitem",
+                       "Startup Cost": 0.00,
+                       "Total Cost": 11731150.90,
+                       "Plan Rows": 600037902,
+                       "Plan Width": 26
+                     },
+                     {
+                       "Node Type": "CStore Scan",
+                       "Parent Relationship": "Inner",
+                       "Relation Name": "part",
+                       "Alias": "part",
+                       "Startup Cost": 0.00,
+                       "Total Cost": 449992.00,
+                       "Plan Rows": 20324,
+                       "Plan Width": 4,
+                       "Filter": "((p_brand = 'Brand#24'::bpchar) AND (p_container = 'JUMBO DRUM'::bpchar))"
+                     }
+                   ]
+                 },
+                 {
+                   "Node Type": "Vector Subquery Scan",
+                   "Parent Relationship": "Inner",
+                   "Alias": "subquery",
+                   "Startup Cost": 12288049.15,
+                   "Total Cost": 12300538.30,
+                   "Plan Rows": 454151,
+                   "Plan Width": 36,
+                   "Plans": [
+                     {
+                       "Node Type": "Vector Hash Aggregate",
+                       "Parent Relationship": "Subquery",
+                       "Startup Cost": 12288049.15,
+                       "Total Cost": 12295996.79,
+                       "Plan Rows": 454151,
+                       "Plan Width": 79,
+                       "Group By Key": ["public.lineitem.l_partkey"],
+                       "Plans": [
+                         {
+                           "Node Type": "Vector Hash Join",
+                           "Parent Relationship": "Outer",
+                           "Join Type": "Semi",
+                           "Startup Cost": 449995.97,
+                           "Total Cost": 12284643.02,
+                           "Plan Rows": 454151,
+                           "Plan Width": 15,
+                           "Hash Cond": "(public.lineitem.l_partkey = public.part.p_partkey)",
+                           "Plans": [
+                             {
+                               "Node Type": "CStore Scan",
+                               "Parent Relationship": "Outer",
+                               "Relation Name": "lineitem",
+                               "Alias": "lineitem",
+                               "Startup Cost": 0.00,
+                               "Total Cost": 11731150.90,
+                               "Plan Rows": 600037902,
+                               "Plan Width": 15
+                             },
+                             {
+                               "Node Type": "CStore Scan",
+                               "Parent Relationship": "Inner",
+                               "Relation Name": "part",
+                               "Alias": "part",
+                               "Startup Cost": 0.00,
+                               "Total Cost": 449992.00,
+                               "Plan Rows": 20324,
+                               "Plan Width": 4,
+                               "Filter": "((p_brand = 'Brand#24'::bpchar) AND (p_container = 'JUMBO DRUM'::bpchar))"
+                             }
+                           ]
+                         }
+                       ]
+                     }
+                   ]
+                 }
+               ]
+             }
+           ]
+         }
+       ]
+     }
+   }
+ ]

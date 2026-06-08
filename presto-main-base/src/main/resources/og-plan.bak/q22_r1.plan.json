@@ -1,0 +1,140 @@
+[
+  {
+    "Plan": {
+      "Node Type": "Row Adapter",
+      "Startup Cost": 1005486.24,
+      "Total Cost": 1005486.24,
+      "Plan Rows": 1,
+      "Plan Width": 67,
+      "Plans": [
+        {
+          "Node Type": "Vector Sort",
+          "Parent Relationship": "Outer",
+          "Startup Cost": 1005486.23,
+          "Total Cost": 1005486.24,
+          "Plan Rows": 1,
+          "Plan Width": 67,
+          "Sort Key": ["(\"substring\"((public.customer.c_phone)::text, 1, 2))"],
+          "Plans": [
+            {
+              "Node Type": "Row Adapter",
+              "Parent Relationship": "InitPlan",
+              "Subplan Name": "InitPlan 1 (returns $0)",
+              "Startup Cost": 558195.56,
+              "Total Cost": 558195.56,
+              "Plan Rows": 1,
+              "Plan Width": 43,
+              "Plans": [
+                {
+                  "Node Type": "Vector Aggregate",
+                  "Parent Relationship": "Outer",
+                  "Startup Cost": 558195.55,
+                  "Total Cost": 558195.56,
+                  "Plan Rows": 1,
+                  "Plan Width": 43,
+                  "Plans": [
+                    {
+                      "Node Type": "CStore Scan",
+                      "Parent Relationship": "Outer",
+                      "Relation Name": "customer",
+                      "Alias": "customer",
+                      "Startup Cost": 0.00,
+                      "Total Cost": 557000.00,
+                      "Plan Rows": 478221,
+                      "Plan Width": 11,
+                      "Filter": "((c_acctbal > 0.00) AND (\"substring\"((c_phone)::text, 1, 2) = ANY ('{22,40,39,23,27,20,34}'::text[])))"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "Node Type": "Vector Streaming(type: LOCAL GATHER dop: 1/64)",
+              "Parent Relationship": "Outer",
+              "Startup Cost": 447290.64,
+              "Total Cost": 447290.66,
+              "Plan Rows": 1,
+              "Plan Width": 67,
+              "Plans": [
+                {
+                  "Node Type": "Vector Hash Aggregate",
+                  "Parent Relationship": "Outer",
+                  "Startup Cost": 447290.64,
+                  "Total Cost": 447290.65,
+                  "Plan Rows": 1,
+                  "Plan Width": 67,
+                  "Group By Key": ["(\"substring\"((public.customer.c_phone)::text, 1, 2))"],
+                  "Plans": [
+                    {
+                      "Node Type": "Vector Streaming(type: LOCAL REDISTRIBUTE dop: 64/64)",
+                      "Parent Relationship": "Outer",
+                      "Startup Cost": 134903.08,
+                      "Total Cost": 447290.64,
+                      "Plan Rows": 1,
+                      "Plan Width": 27,
+                      "Plans": [
+                        {
+                          "Node Type": "Vector Hash Join",
+                          "Parent Relationship": "Outer",
+                          "Join Type": "Right Anti",
+                          "Startup Cost": 134903.08,
+                          "Total Cost": 447290.61,
+                          "Plan Rows": 1,
+                          "Plan Width": 27,
+                          "Hash Cond": "(orders.o_custkey = public.customer.c_custkey)",
+                          "Plans": [
+                            {
+                              "Node Type": "Vector Streaming(type: LOCAL REDISTRIBUTE dop: 64/64)",
+                              "Parent Relationship": "Outer",
+                              "Startup Cost": 0.00,
+                              "Total Cost": 303011.72,
+                              "Plan Rows": 150000000,
+                              "Plan Width": 4,
+                              "Plans": [
+                                {
+                                  "Node Type": "CStore Scan",
+                                  "Parent Relationship": "Outer",
+                                  "Relation Name": "orders",
+                                  "Alias": "orders",
+                                  "Startup Cost": 0.00,
+                                  "Total Cost": 97921.88,
+                                  "Plan Rows": 150000000,
+                                  "Plan Width": 4
+                                }
+                              ]
+                            },
+                            {
+                              "Node Type": "Vector Streaming(type: LOCAL REDISTRIBUTE dop: 64/1)",
+                              "Parent Relationship": "Inner",
+                              "Startup Cost": 0.00,
+                              "Total Cost": 134868.90,
+                              "Plan Rows": 175000,
+                              "Plan Width": 31,
+                              "Plans": [
+                                {
+                                  "Node Type": "CStore Scan",
+                                  "Parent Relationship": "Outer",
+                                  "Relation Name": "customer",
+                                  "Alias": "customer",
+                                  "Startup Cost": 0.00,
+                                  "Total Cost": 71703.12,
+                                  "Plan Rows": 175000,
+                                  "Plan Width": 31,
+                                  "Filter": "((c_acctbal > $0) AND (\"substring\"((c_phone)::text, 1, 2) = ANY ('{22,40,39,23,27,20,34}'::text[])))"
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+]

@@ -102,13 +102,19 @@ TpchPrestoToVeloxConnector::toVeloxTableHandle(
     const protocol::TableHandle& tableHandle,
     const VeloxExprConverter& exprConverter,
     const TypeParser& typeParser) const {
+  VELOX_CHECK_NOT_NULL(
+      tableHandle.connectorTableLayout,
+      "Missing connector table layout for connector {}. The plan must carry a TpchTableLayoutHandle before native execution.",
+      tableHandle.connectorId);
+
   auto tpchLayout =
       std::dynamic_pointer_cast<const protocol::tpch::TpchTableLayoutHandle>(
           tableHandle.connectorTableLayout);
   VELOX_CHECK_NOT_NULL(
       tpchLayout,
-      "Unexpected layout type {}",
-      tableHandle.connectorTableLayout->_type);
+      "Unexpected layout type {} for connector {}",
+      tableHandle.connectorTableLayout->_type,
+      tableHandle.connectorId);
   return std::make_unique<connector::tpch::TpchTableHandle>(
       tableHandle.connectorId,
       tpch::fromTableName(tpchLayout->table.tableName),
