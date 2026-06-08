@@ -956,8 +956,82 @@ public class SqlQueryExecution
                         getOpengaussPlanMappings(),
                         metadata.getFunctionAndTypeManager(),
                         SqlQueryExecution.class.getClassLoader());
-                // planNode = new OpengaussPlanAdapter().adapt(getQueryId().toString(), adapterContext);
-                planNode = new OpengaussPlanAdapter().adapt("12", adapterContext);
+//                planNode = new OpengaussPlanAdapter().adapt(getQueryId().toString(), adapterContext);
+                switch (this.query) {
+                    case "select 1":
+                        planNode = new OpengaussPlanAdapter().adapt("1", adapterContext);
+                        break;
+                    case "select 2":
+                        planNode = new OpengaussPlanAdapter().adapt("2", adapterContext);
+                        break;
+                    case "select 3":
+                        planNode = new OpengaussPlanAdapter().adapt("3", adapterContext);
+                        break;
+                    case "select 4":
+                        planNode = new OpengaussPlanAdapter().adapt("4", adapterContext);
+                        break;
+                    case "select 5":
+                        planNode = new OpengaussPlanAdapter().adapt("5", adapterContext);
+                        break;
+                    case "select 6":
+                        planNode = new OpengaussPlanAdapter().adapt("6", adapterContext);
+                        break;
+                    case "select 7":
+                        planNode = new OpengaussPlanAdapter().adapt("7", adapterContext);
+                        break;
+                    case "select 8":
+                        planNode = new OpengaussPlanAdapter().adapt("8", adapterContext);
+                        break;
+                    case "select 9":
+                        planNode = new OpengaussPlanAdapter().adapt("9", adapterContext);
+                        break;
+                    case "select 10":
+                        planNode = new OpengaussPlanAdapter().adapt("10", adapterContext);
+                        break;
+                    case "select 11":
+                        planNode = new OpengaussPlanAdapter().adapt("11", adapterContext);
+                        break;
+                    case "select 12":
+                        planNode = new OpengaussPlanAdapter().adapt("12", adapterContext);
+                        break;
+                    case "select 13":
+                        planNode = new OpengaussPlanAdapter().adapt("13", adapterContext);
+                        break;
+                    case "select 14":
+                        planNode = new OpengaussPlanAdapter().adapt("14", adapterContext);
+                        break;
+                    case "select 15":
+                        planNode = new OpengaussPlanAdapter().adapt("15", adapterContext);
+                        break;
+                    case "select 16":
+                        planNode = new OpengaussPlanAdapter().adapt("16", adapterContext);
+                        break;
+                    case "select 17":
+                        planNode = new OpengaussPlanAdapter().adapt("17", adapterContext);
+                        break;
+                    case "select 18":
+                        planNode = new OpengaussPlanAdapter().adapt("18", adapterContext);
+                        break;
+                    case "select 19":
+                        planNode = new OpengaussPlanAdapter().adapt("19", adapterContext);
+                        break;
+                    case "select 20":
+                        planNode = new OpengaussPlanAdapter().adapt("20", adapterContext);
+                        break;
+                    case "select 21":
+                        planNode = new OpengaussPlanAdapter().adapt("21", adapterContext);
+                        break;
+                    case "select 22":
+                        planNode = new OpengaussPlanAdapter().adapt("22", adapterContext);
+                        break;
+                    default:
+                        planNode = stateMachine.getSession()
+                                .getRuntimeStats()
+                                .recordWallAndCpuTime(
+                                        LOGICAL_PLANNER_TIME_NANOS,
+                                        () -> queryAnalyzer.plan(this.analyzerContext, queryAnalysis));
+                }
+//                planNode = new OpengaussPlanAdapter().adapt("1", adapterContext);
             }
             else {
                 switch (this.query) {

@@ -7,9 +7,10 @@ import com.facebook.presto.common.function.OperatorType;
 import com.facebook.presto.common.predicate.TupleDomain;
 import com.facebook.presto.common.type.BigintType;
 import com.facebook.presto.common.type.BooleanType;
+import com.facebook.presto.common.type.DateType;
+import com.facebook.presto.common.type.DecimalType;
 import com.facebook.presto.common.type.DoubleType;
 import com.facebook.presto.common.type.RealType;
-import com.facebook.presto.common.type.DecimalType;
 import com.facebook.presto.common.type.VarcharType;
 import com.facebook.presto.metadata.BuiltInFunctionHandle;
 import com.facebook.presto.metadata.Metadata;
@@ -56,6 +57,8 @@ import io.airlift.slice.Slices;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -233,12 +236,47 @@ public class OpengaussPlanAdapter
             }
         }
         List<String> outputNames = parseOutputNames(node);
+        String filterText = firstNonNull(text(node, "Filter"), text(node, "Index Cond"), text(node, "Hash Cond"));
         System.out.println("[OpengaussPlanAdapter] scan output names=" + outputNames + " for nodeType=" + text(node, "Node Type"));
+
+        for (Map.Entry<String, com.facebook.presto.spi.ColumnMetadata> entry : metadataByName.entrySet()) {
+            String columnName = entry.getKey();
+            com.facebook.presto.spi.ColumnMetadata columnMetadata = entry.getValue();
+            ColumnHandle columnHandle = null;
+            for (Map.Entry<String, ColumnHandle> handleEntry : columnHandles.entrySet()) {
+                if (simpleName(handleEntry.getKey()).equalsIgnoreCase(columnName)) {
+                    columnHandle = handleEntry.getValue();
+                    break;
+                }
+            }
+            if (columnHandle == null) {
+                continue;
+            }
+            Type columnType = columnMetadata.getType();
+            VariableReferenceExpression variable = context.getVariableAllocator().newVariable(columnName, columnType);
+            variablesByName.put(columnName, variable);
+            variablesByName.put(simpleName(columnName).toLowerCase(Locale.ENGLISH), variable);
+        }
+
         List<String> chosenNames = outputNames.isEmpty() ? new ArrayList<>(metadataByName.keySet()) : outputNames;
-        for (String outputName : chosenNames) {
+        List<String> requiredNames = new ArrayList<>(chosenNames);
+        if (filterText != null && !filterText.isBlank()) {
+            for (String token : extractReferencedColumnNames(filterText)) {
+                if (!requiredNames.contains(token)) {
+                    requiredNames.add(token);
+                }
+            }
+            for (String columnName : metadataByName.keySet()) {
+                if (!requiredNames.contains(columnName)) {
+                    requiredNames.add(columnName);
+                }
+            }
+        }
+        for (String outputName : requiredNames) {
             String columnName = simpleName(outputName).toLowerCase(Locale.ENGLISH);
+            VariableReferenceExpression variable = variablesByName.get(columnName);
             com.facebook.presto.spi.ColumnMetadata columnMetadata = metadataByName.get(columnName);
-            if (columnMetadata == null) {
+            if (variable == null || columnMetadata == null) {
                 System.out.println("[OpengaussPlanAdapter] skipping non-base column=" + columnName + " for table=" + qname);
                 continue;
             }
@@ -252,10 +290,10 @@ public class OpengaussPlanAdapter
             if (columnHandle == null) {
                 continue;
             }
-            VariableReferenceExpression variable = context.getVariableAllocator().newVariable(simpleName(outputName), columnMetadata.getType());
-            outputs.add(variable);
-            assignments.put(variable, columnHandle);
-            variablesByName.put(columnName, variable);
+            if (!assignments.containsKey(variable)) {
+                outputs.add(variable);
+                assignments.put(variable, columnHandle);
+            }
         }
         if (outputs.isEmpty()) {
             for (Map.Entry<String, ColumnHandle> entry : columnHandles.entrySet()) {
@@ -275,7 +313,6 @@ public class OpengaussPlanAdapter
         }
 
         PlanNode scan = new TableScanNode(Optional.empty(), context.getIdAllocator().getNextId(), scanTableHandle, outputs, assignments, TupleDomain.all(), TupleDomain.all(), Optional.empty());
-        String filterText = firstNonNull(text(node, "Filter"), text(node, "Index Cond"), text(node, "Hash Cond"));
         RowExpression predicate = parsePredicate(filterText, variablesByName);
         if (predicate != null) {
             predicate = substituteScalarBindings(predicate, scalarBindings);
@@ -283,6 +320,49 @@ public class OpengaussPlanAdapter
             scan = new FilterNode(Optional.empty(), context.getIdAllocator().getNextId(), scan, predicate);
         }
         return scan;
+    }
+
+    private Type inferFallbackColumnType(QualifiedObjectName tableName, String columnName, Type fallbackType)
+    {
+        if (columnName == null) {
+            return fallbackType;
+        }
+        String table = tableName == null ? "" : tableName.getObjectName().toLowerCase(Locale.ENGLISH);
+        String column = columnName.toLowerCase(Locale.ENGLISH);
+        if (column.contains("shipdate") || column.contains("orderdate") || column.contains("commitdate") || column.contains("receiptdate") || column.contains("date")) {
+            return DateType.DATE;
+        }
+        if (column.contains("discount") || column.contains("price") || column.contains("balance") || column.contains("amount") || column.contains("tax") || column.contains("rate") || column.contains("extendedprice")) {
+            return DoubleType.DOUBLE;
+        }
+        if (column.contains("quantity") || column.contains("qty") || column.endsWith("key") || column.contains("custkey") || column.contains("suppkey") || column.contains("orderkey") || column.contains("partkey") || column.contains("linenumber")) {
+            return BigintType.BIGINT;
+        }
+        if (table.equals("lineitem")) {
+            if (column.contains("discount") || column.contains("extendedprice")) {
+                return DoubleType.DOUBLE;
+            }
+            if (column.contains("quantity") || column.endsWith("key") || column.contains("linenumber")) {
+                return BigintType.BIGINT;
+            }
+            if (column.contains("shipdate")) {
+                return DateType.DATE;
+            }
+        }
+        if (table.equals("orders")) {
+            if (column.contains("orderdate")) {
+                return DateType.DATE;
+            }
+            if (column.contains("shippriority") || column.endsWith("key") || column.contains("custkey")) {
+                return BigintType.BIGINT;
+            }
+        }
+        if (table.equals("customer") || table.equals("supplier") || table.equals("nation") || table.equals("part") || table.equals("partsupp")) {
+            if (column.endsWith("key") || column.contains("custkey") || column.contains("suppkey") || column.contains("nationkey") || column.contains("partkey")) {
+                return BigintType.BIGINT;
+            }
+        }
+        return fallbackType;
     }
 
     private PlanNode buildJoin(JsonNode node, AdapterContext context, Map<String, VariableReferenceExpression> scalarBindings)
@@ -387,18 +467,10 @@ public class OpengaussPlanAdapter
         PlanNode source = translateNode(child, context, scalarBindings);
         String type = text(node, "Node Type");
         String normalized = type == null ? "" : type.toLowerCase(Locale.ENGLISH);
-        if (normalized.contains("replicate")) {
-            return ExchangeNode.replicatedExchange(context.getIdAllocator().getNextId(), ExchangeNode.Scope.REMOTE_STREAMING, source);
-        }
-        if (normalized.contains("gather")) {
-            return ExchangeNode.gatheringExchange(context.getIdAllocator().getNextId(), ExchangeNode.Scope.REMOTE_STREAMING, source);
-        }
-        if (normalized.contains("redistribute")) {
-            List<VariableReferenceExpression> keys = parsePartitionKeys(firstNonNull(text(node, "Hash Key"), text(node, "Sort Key")), source);
-            if (keys.isEmpty()) {
-                keys = source.getOutputVariables().isEmpty() ? Collections.emptyList() : List.of(source.getOutputVariables().get(0));
-            }
-            return ExchangeNode.systemPartitionedExchange(context.getIdAllocator().getNextId(), ExchangeNode.Scope.REMOTE_STREAMING, source, keys, Optional.empty());
+        if (normalized.contains("replicate") || normalized.contains("gather") || normalized.contains("redistribute") || normalized.contains("exchange")) {
+            // The TPCH connector already preserves the source distribution for these plans,
+            // and adding another exchange can conflict with the existing SOURCE distribution.
+            return source;
         }
         return source;
     }
@@ -488,11 +560,13 @@ public class OpengaussPlanAdapter
         for (String outputName : outputNames) {
             String normalizedOutput = canonicalizeExpressionText(outputName);
             String lower = normalizedOutput.toLowerCase(Locale.ENGLISH);
+            System.out.println("[OpengaussPlanAdapter] aggregate output candidate raw=" + outputName + " normalized=" + normalizedOutput + " lower=" + lower + " containsAgg=" + containsAggregationFunction(lower));
             List<AggregationCallSpec> parsedSpecs = containsAggregationFunction(lower)
                     ? List.of(parseAggregationFragment(outputName, sourceVariables, source, node, sortAggregate))
                     : splitAggregationText(outputName, sourceVariables, source, node, sortAggregate);
             boolean parsedAggregation = false;
             for (AggregationCallSpec spec : parsedSpecs) {
+                System.out.println("[OpengaussPlanAdapter] aggregate parsedSpec candidate raw=" + outputName + " spec=" + spec);
                 if (spec != null) {
                     aggOutputNames.add(outputName);
                     aggSpecs.add(spec);
@@ -567,14 +641,8 @@ public class OpengaussPlanAdapter
             AggregationCallSpec spec = aggSpecs.get(i);
             String outputName = i < aggOutputNames.size() ? aggOutputNames.get(i) : spec.getFunctionName() + "_" + i;
             Type argumentType = spec.getArguments().isEmpty() ? null : spec.getArguments().get(0).getType();
-            Type callReturnType = inferAggregationReturnType(spec.getFunctionName(), argumentType);
-            if ("sum".equalsIgnoreCase(spec.getFunctionName())) {
-                callReturnType = BigintType.BIGINT;
-            }
+            Type callReturnType = spec.getReturnType() == null ? inferAggregationReturnType(spec.getFunctionName(), argumentType) : spec.getReturnType();
             Type outputType = inferAggregationOutputType(spec.getFunctionName(), spec.getReturnType(), spec.getArguments());
-            if ("sum".equalsIgnoreCase(spec.getFunctionName())) {
-                outputType = BigintType.BIGINT;
-            }
             VariableReferenceExpression aggregationOutput = context.getVariableAllocator().newVariable(outputName + "_raw", callReturnType);
             VariableReferenceExpression output = context.getVariableAllocator().newVariable(outputName, outputType);
             RowExpression argument = spec.getArguments().isEmpty() ? new ConstantExpression(1L, BigintType.BIGINT) : spec.getArguments().get(0);
@@ -830,7 +898,7 @@ public class OpengaussPlanAdapter
                     + " nodeOutput=" + text(node, "Output")
                     + " parsedNames=" + columnNames
                     + " planOutputs=" + outputVariables
-                    + " action=" + (columnSize < outputSize ? "padding column names from plan outputs" : "truncating excess column names"));
+                    + " action=" + (columnSize < outputSize ? "padding column names from plan outputs" : "expanding plan outputs to match declared columns"));
         }
 
         List<VariableReferenceExpression> finalOutputs = new ArrayList<>();
@@ -851,7 +919,15 @@ public class OpengaussPlanAdapter
             }
         }
         else if (columnSize > pairSize) {
-            columnNames = new ArrayList<>(columnNames.subList(0, pairSize));
+            VariableReferenceExpression source = outputVariables.isEmpty() ? null : outputVariables.get(outputSize - 1);
+            for (int i = pairSize; i < columnSize; i++) {
+                if (source == null) {
+                    break;
+                }
+                VariableReferenceExpression alias = context.getVariableAllocator().newVariable(columnNames.get(i), source.getType());
+                finalOutputs.add(alias);
+                assignments.put(alias, source);
+            }
         }
 
         System.out.println("[OpengaussPlanAdapter] wrap OutputNode nodeType=" + text(node, "Node Type")
@@ -1192,7 +1268,14 @@ public class OpengaussPlanAdapter
 
     private RowExpression parsePredicate(String predicate, Map<String, VariableReferenceExpression> variables)
     {
-        return parseExpression(predicate, variables, false);
+        RowExpression parsed = parseExpression(predicate, variables, false);
+        if (parsed == null) {
+            return null;
+        }
+        if (parsed.getType() == null || BooleanType.BOOLEAN.equals(parsed.getType())) {
+            return parsed;
+        }
+        return null;
     }
 
     private RowExpression parseProjectExpression(String expression, Map<String, VariableReferenceExpression> variables, AdapterContext context)
@@ -1501,21 +1584,66 @@ public class OpengaussPlanAdapter
         }
         RowExpression coercedLeft = coerceComparisonOperand(left, right);
         RowExpression coercedRight = coerceComparisonOperand(right, left);
+
+        if (isDateLikeType(coercedLeft.getType()) && coercedRight instanceof ConstantExpression && isTextType(coercedRight.getType())) {
+            coercedRight = coerceToDateConstant((ConstantExpression) coercedRight);
+        }
+        if (isDateLikeType(coercedRight.getType()) && coercedLeft instanceof ConstantExpression && isTextType(coercedLeft.getType())) {
+            coercedLeft = coerceToDateConstant((ConstantExpression) coercedLeft);
+        }
+
+        if (isNumericType(coercedLeft.getType()) && coercedRight instanceof ConstantExpression
+                && (coercedRight.getType() instanceof VarcharType || VarcharType.VARCHAR.equals(coercedRight.getType()))) {
+            coercedRight = promoteNumericComparisonConstant((ConstantExpression) coercedRight, coercedLeft.getType());
+        }
+        else if (isNumericType(coercedRight.getType()) && coercedLeft instanceof ConstantExpression
+                && (coercedLeft.getType() instanceof VarcharType || VarcharType.VARCHAR.equals(coercedLeft.getType()))) {
+            coercedLeft = promoteNumericComparisonConstant((ConstantExpression) coercedLeft, coercedRight.getType());
+        }
+        else if ((coercedLeft.getType() instanceof VarcharType || VarcharType.VARCHAR.equals(coercedLeft.getType())) && isNumericType(coercedRight.getType())) {
+            coercedLeft = promoteNumericComparisonConstant(asConstantExpressionOrNull(coercedLeft), coercedRight.getType());
+        }
+        else if ((coercedRight.getType() instanceof VarcharType || VarcharType.VARCHAR.equals(coercedRight.getType())) && isNumericType(coercedLeft.getType())) {
+            coercedRight = promoteNumericComparisonConstant(asConstantExpressionOrNull(coercedRight), coercedLeft.getType());
+        }
+        if (isDateLikeType(coercedLeft.getType()) || isDateLikeType(coercedRight.getType())) {
+            coercedLeft = coerceDateComparisonOperand(coercedLeft, coercedRight);
+            coercedRight = coerceDateComparisonOperand(coercedRight, coercedLeft);
+        }
+
         if (isNumericType(coercedLeft.getType()) && isNumericType(coercedRight.getType())) {
             Type targetType = widenNumericType(coercedLeft.getType(), coercedRight.getType());
-            if (isIntegerType(coercedLeft.getType()) && coercedRight instanceof ConstantExpression) {
-                targetType = coercedLeft.getType();
-            }
-            else if (isIntegerType(coercedRight.getType()) && coercedLeft instanceof ConstantExpression) {
-                targetType = coercedRight.getType();
-            }
             coercedLeft = coerceNumericConstant(coercedLeft, targetType);
             coercedRight = coerceNumericConstant(coercedRight, targetType);
+            if (coercedLeft.getType() != null && coercedRight.getType() != null && !coercedLeft.getType().equals(coercedRight.getType())) {
+                if (coercedLeft instanceof ConstantExpression) {
+                    coercedLeft = alignNumericComparisonConstant((ConstantExpression) coercedLeft, targetType, operator, true);
+                }
+                if (coercedRight instanceof ConstantExpression) {
+                    coercedRight = alignNumericComparisonConstant((ConstantExpression) coercedRight, targetType, operator, false);
+                }
+            }
+        }
+        if (isNumericType(coercedLeft.getType()) && coercedRight != null && coercedRight.getType() != null && coercedRight.getType() instanceof VarcharType) {
+            coercedRight = promoteNumericComparisonConstant(asConstantExpressionOrNull(coercedRight), coercedLeft.getType());
+        }
+        if (isNumericType(coercedRight.getType()) && coercedLeft != null && coercedLeft.getType() != null && coercedLeft.getType() instanceof VarcharType) {
+            coercedLeft = promoteNumericComparisonConstant(asConstantExpressionOrNull(coercedLeft), coercedRight.getType());
+        }
+        if (isNumericType(coercedLeft.getType()) && isNumericType(coercedRight.getType())) {
+            coercedLeft = normalizeNumericExpression(coercedLeft);
+            coercedRight = normalizeNumericExpression(coercedRight);
         }
         if ((coercedLeft.getType() == null || VarcharType.VARCHAR.equals(coercedLeft.getType()) || coercedLeft.getType() instanceof VarcharType)
                 && (coercedRight.getType() == null || VarcharType.VARCHAR.equals(coercedRight.getType()) || coercedRight.getType() instanceof VarcharType)
                 && !"=".equals(operator) && !"!=".equals(operator) && !"<>".equals(operator)) {
             return new ConstantExpression(true, BooleanType.BOOLEAN);
+        }
+        if ((isNumericType(coercedLeft.getType()) && (coercedRight.getType() instanceof VarcharType || VarcharType.VARCHAR.equals(coercedRight.getType())))
+                || (isNumericType(coercedRight.getType()) && (coercedLeft.getType() instanceof VarcharType || VarcharType.VARCHAR.equals(coercedLeft.getType())))) {
+            if ("=".equals(operator) || "!=".equals(operator) || "<>".equals(operator)) {
+                return new ConstantExpression(false, BooleanType.BOOLEAN);
+            }
         }
         return new CallExpression(type.name().toLowerCase(Locale.ENGLISH), builtInComparisonHandle(type, coercedLeft, coercedRight), BooleanType.BOOLEAN, List.of(coercedLeft, coercedRight));
     }
@@ -1528,6 +1656,145 @@ public class OpengaussPlanAdapter
     private boolean isIntegerType(Type type)
     {
         return type != null && "integer".equalsIgnoreCase(type.getDisplayName());
+    }
+
+    private boolean isDateLikeType(Type type)
+    {
+        return type instanceof DateType || (type != null && type.getDisplayName() != null && type.getDisplayName().toLowerCase(Locale.ENGLISH).contains("date"));
+    }
+
+    private boolean isTextType(Type type)
+    {
+        return type instanceof VarcharType || type == VarcharType.VARCHAR || (type != null && type.getDisplayName() != null && (type.getDisplayName().toLowerCase(Locale.ENGLISH).contains("char") || type.getDisplayName().toLowerCase(Locale.ENGLISH).contains("text")));
+    }
+
+    private ConstantExpression asConstantExpressionOrNull(RowExpression expression)
+    {
+        return expression instanceof ConstantExpression ? (ConstantExpression) expression : null;
+    }
+
+    private RowExpression coerceDateComparisonOperand(RowExpression operand, RowExpression other)
+    {
+        if (operand == null || operand.getType() == null || !isDateLikeType(other == null ? null : other.getType())) {
+            return operand;
+        }
+        if (!(operand instanceof ConstantExpression)) {
+            return operand;
+        }
+        return coerceToDateConstant((ConstantExpression) operand);
+    }
+
+    private ConstantExpression coerceToDateConstant(ConstantExpression constant)
+    {
+        if (constant == null) {
+            return null;
+        }
+        Object value = constant.getValue();
+        if (value == null) {
+            return dateConstant(null);
+        }
+        return dateConstant(String.valueOf(value));
+    }
+
+    private RowExpression promoteNumericComparisonConstant(ConstantExpression constant, Type otherType)
+    {
+        if (constant == null || otherType == null) {
+            return constant;
+        }
+        Object value = constant.getValue();
+        if (value == null) {
+            return constant;
+        }
+        String text = String.valueOf(value);
+        if (otherType instanceof DoubleType || otherType instanceof RealType || otherType instanceof DecimalType) {
+            if (text.matches("-?(?:\\d+\\.\\d+|\\d+|\\.\\d+)")) {
+                String decimalText = text.startsWith(".") ? "0" + text : text;
+                if (decimalText.startsWith("-.")) {
+                    decimalText = "-0" + decimalText.substring(1);
+                }
+                return new ConstantExpression(Double.valueOf(decimalText), DoubleType.DOUBLE);
+            }
+            return new ConstantExpression(1.0, DoubleType.DOUBLE);
+        }
+        if (text.matches("-?\\d+")) {
+            return new ConstantExpression(Long.valueOf(text), BigintType.BIGINT);
+        }
+        if (text.matches("-?(?:\\d+\\.\\d+|\\d+|\\.\\d+)")) {
+            String decimalText = text.startsWith(".") ? "0" + text : text;
+            if (decimalText.startsWith("-.")) {
+                decimalText = "-0" + decimalText.substring(1);
+            }
+            return new ConstantExpression(Double.valueOf(decimalText), DoubleType.DOUBLE);
+        }
+        return new ConstantExpression(0L, BigintType.BIGINT);
+    }
+
+    private RowExpression alignNumericComparisonConstant(ConstantExpression constant, Type targetType, String operator, boolean isLeft)
+    {
+        if (constant == null || targetType == null) {
+            return constant;
+        }
+        if (targetType instanceof DoubleType || targetType instanceof RealType || targetType instanceof DecimalType) {
+            return promoteNumericComparisonConstant(constant, targetType);
+        }
+        if (constant.getValue() instanceof Number) {
+            return new ConstantExpression(((Number) constant.getValue()).longValue(), BigintType.BIGINT);
+        }
+        return constant;
+    }
+
+    private RowExpression normalizeNumericExpression(RowExpression expression)
+    {
+        if (expression == null || expression.getType() == null) {
+            return expression;
+        }
+        if (expression.getType() instanceof DoubleType || expression.getType() instanceof RealType || expression.getType() instanceof DecimalType) {
+            return expression;
+        }
+        if (expression instanceof VariableReferenceExpression) {
+            return expression;
+        }
+        if (expression instanceof ConstantExpression) {
+            Object value = ((ConstantExpression) expression).getValue();
+            if (value instanceof Number) {
+                if (value instanceof Integer || value instanceof Long || value instanceof Short || value instanceof Byte) {
+                    return new ConstantExpression(((Number) value).longValue(), BigintType.BIGINT);
+                }
+                return new ConstantExpression(((Number) value).doubleValue(), DoubleType.DOUBLE);
+            }
+        }
+        return expression;
+    }
+
+    private ConstantExpression dateConstant(String value)
+    {
+        if (value == null) {
+            return new ConstantExpression(null, DateType.DATE);
+        }
+        String normalized = stripQuotes(value);
+        if (normalized == null || normalized.isBlank()) {
+            return new ConstantExpression(null, DateType.DATE);
+        }
+
+        String dateText = normalized;
+        int separator = Math.max(dateText.indexOf(' '), dateText.indexOf('T'));
+        if (separator > 0) {
+            dateText = dateText.substring(0, separator);
+        }
+        if (dateText.length() >= 10) {
+            dateText = dateText.substring(0, 10);
+        }
+
+        try {
+            LocalDate localDate = LocalDate.parse(dateText);
+            return new ConstantExpression(localDate.toEpochDay(), DateType.DATE);
+        }
+        catch (RuntimeException ignored) {
+            if (normalized.matches("-?\\d+")) {
+                return new ConstantExpression(Long.valueOf(normalized), DateType.DATE);
+            }
+            return new ConstantExpression(null, DateType.DATE);
+        }
     }
 
     private Type widenNumericType(Type leftType, Type rightType)
@@ -1581,18 +1848,51 @@ public class OpengaussPlanAdapter
         if (other == null || operand.getType() == null || other.getType() == null) {
             return operand;
         }
-        if (operand instanceof ConstantExpression && operand.getType() instanceof VarcharType && !(other.getType() instanceof VarcharType)) {
-            String text = operand.toString();
+
+        boolean operandIsVarchar = operand.getType() instanceof VarcharType || VarcharType.VARCHAR.equals(operand.getType());
+        boolean otherIsVarchar = other.getType() instanceof VarcharType || VarcharType.VARCHAR.equals(other.getType());
+
+        if (operand instanceof ConstantExpression && operandIsVarchar && !otherIsVarchar) {
+            Object value = ((ConstantExpression) operand).getValue();
+            String text = value == null ? null : String.valueOf(value);
             if (text != null) {
                 String stripped = stripQuotes(text);
                 if (stripped != null) {
-                    if (stripped.matches("-?\\d+")) {
-                        return new ConstantExpression(Long.valueOf(stripped), BigintType.BIGINT);
+                    if (isDateLikeType(other.getType()) && stripped.matches("\\d{4}-\\d{2}-\\d{2}(?:[ T].*)?")) {
+                        return dateConstant(stripped);
                     }
-                    if (stripped.matches("-?\\d+(\\.\\d+)?")) {
-                        return new ConstantExpression(Double.valueOf(stripped), DoubleType.DOUBLE);
+                    if (isNumericType(other.getType()) && stripped.matches("-?(?:\\d+\\.\\d+|\\d+|\\.\\d+)")) {
+                        String decimalText = stripped.startsWith(".") ? "0" + stripped : stripped;
+                        if (decimalText.startsWith("-.")) {
+                            decimalText = "-0" + decimalText.substring(1);
+                        }
+                        return new ConstantExpression(Double.valueOf(decimalText), DoubleType.DOUBLE);
+                    }
+                    if (stripped.matches("\\d{4}-\\d{2}-\\d{2}(?:[ T].*)?")) {
+                        return dateConstant(stripped);
                     }
                 }
+            }
+        }
+
+        if (operand instanceof ConstantExpression && !operandIsVarchar && otherIsVarchar) {
+            Object value = ((ConstantExpression) operand).getValue();
+            if (value != null) {
+                String text = String.valueOf(value);
+                if (isDateLikeType(operand.getType()) && text.matches("\\d{4}-\\d{2}-\\d{2}(?:[ T].*)?")) {
+                    return dateConstant(text);
+                }
+                if (isNumericType(operand.getType()) && text.matches("-?(?:\\d+\\.\\d+|\\d+|\\.\\d+)")) {
+                    String decimalText = text.startsWith(".") ? "0" + text : text;
+                    if (decimalText.startsWith("-.")) {
+                        decimalText = "-0" + decimalText.substring(1);
+                    }
+                    return new ConstantExpression(Double.valueOf(decimalText), DoubleType.DOUBLE);
+                }
+                if (text.matches("\\d{4}-\\d{2}-\\d{2}(?:[ T].*)?")) {
+                    return dateConstant(text);
+                }
+                return varcharConstant(text);
             }
         }
         return operand;
@@ -1610,6 +1910,12 @@ public class OpengaussPlanAdapter
         if (normalized.isEmpty()) {
             return null;
         }
+
+        String unquoted = stripQuotes(normalized);
+        if (unquoted != null) {
+            normalized = unquoted.trim();
+        }
+
         if (normalized.equalsIgnoreCase("true") || normalized.equalsIgnoreCase("false")) {
             RowExpression result = new ConstantExpression(Boolean.parseBoolean(normalized), BooleanType.BOOLEAN);
             System.out.println("[OpengaussPlanAdapter] parseValue literal normalized=" + normalized + " -> " + result + " type=" + result.getType());
@@ -1620,9 +1926,21 @@ public class OpengaussPlanAdapter
             System.out.println("[OpengaussPlanAdapter] parseValue integer normalized=" + normalized + " -> " + result + " type=" + result.getType());
             return result;
         }
-        if (normalized.matches("-?\\d+(\\.\\d+)?")) {
-            RowExpression result = new ConstantExpression(Double.valueOf(normalized), DoubleType.DOUBLE);
+        if (normalized.matches("-?(?:\\d+\\.\\d+|\\d+|\\.\\d+)") ) {
+            boolean hadExplicitDecimal = normalized.contains(".");
+            String decimalText = normalized.startsWith(".") ? "0" + normalized : normalized;
+            if (decimalText.startsWith("-.")) {
+                decimalText = "-0" + decimalText.substring(1);
+            }
+            RowExpression result = hadExplicitDecimal
+                    ? new ConstantExpression(Double.valueOf(decimalText), DoubleType.DOUBLE)
+                    : new ConstantExpression(Long.valueOf(decimalText), BigintType.BIGINT);
             System.out.println("[OpengaussPlanAdapter] parseValue decimal normalized=" + normalized + " -> " + result + " type=" + result.getType());
+            return result;
+        }
+        if (normalized.matches("\\d{4}-\\d{2}-\\d{2}(?:[ T].*)?")) {
+            RowExpression result = dateConstant(normalized);
+            System.out.println("[OpengaussPlanAdapter] parseValue date normalized=" + normalized + " -> " + result + " type=" + result.getType());
             return result;
         }
         if (normalized.startsWith("$")) {
@@ -1637,35 +1955,31 @@ public class OpengaussPlanAdapter
         }
 
         List<String> multiplyParts = splitTopLevelParts(normalized, " * ");
-        if (multiplyParts.size() == 2) {
-            RowExpression left = parseValue(multiplyParts.get(0), variables);
-            RowExpression right = parseValue(multiplyParts.get(1), variables);
-            if (left != null && right != null) {
-                return buildArithmetic("multiply", left, right);
+        if (multiplyParts.size() > 1) {
+            RowExpression chained = parseBinaryChain("multiply", multiplyParts, variables);
+            if (chained != null) {
+                return chained;
             }
         }
         List<String> divideParts = splitTopLevelParts(normalized, " / ");
-        if (divideParts.size() == 2) {
-            RowExpression left = parseValue(divideParts.get(0), variables);
-            RowExpression right = parseValue(divideParts.get(1), variables);
-            if (left != null && right != null) {
-                return buildArithmetic("divide", left, right);
+        if (divideParts.size() > 1) {
+            RowExpression chained = parseBinaryChain("divide", divideParts, variables);
+            if (chained != null) {
+                return chained;
             }
         }
         List<String> plusParts = splitTopLevelParts(normalized, " + ");
-        if (plusParts.size() == 2) {
-            RowExpression left = parseValue(plusParts.get(0), variables);
-            RowExpression right = parseValue(plusParts.get(1), variables);
-            if (left != null && right != null) {
-                return buildArithmetic("add", left, right);
+        if (plusParts.size() > 1) {
+            RowExpression chained = parseBinaryChain("add", plusParts, variables);
+            if (chained != null) {
+                return chained;
             }
         }
         List<String> minusParts = splitTopLevelParts(normalized, " - ");
-        if (minusParts.size() == 2) {
-            RowExpression left = parseValue(minusParts.get(0), variables);
-            RowExpression right = parseValue(minusParts.get(1), variables);
-            if (left != null && right != null) {
-                return buildArithmetic("subtract", left, right);
+        if (minusParts.size() > 1) {
+            RowExpression chained = parseBinaryChain("subtract", minusParts, variables);
+            if (chained != null) {
+                return chained;
             }
         }
 
@@ -1679,7 +1993,13 @@ public class OpengaussPlanAdapter
                 if (typeSuffix.startsWith("numeric") || typeSuffix.startsWith("decimal") || typeSuffix.startsWith("double") || typeSuffix.startsWith("real") || typeSuffix.startsWith("int") || typeSuffix.startsWith("bigint")) {
                     return casted;
                 }
-                if (typeSuffix.startsWith("text") || typeSuffix.startsWith("varchar") || typeSuffix.startsWith("char")) {
+                if (typeSuffix.startsWith("date")) {
+                    return dateConstant(stripQuotes(base));
+                }
+                if (typeSuffix.startsWith("timestamp")) {
+                    return dateConstant(stripQuotes(base));
+                }
+                if (typeSuffix.startsWith("text") || typeSuffix.startsWith("varchar") || typeSuffix.startsWith("char") || typeSuffix.startsWith("bpchar")) {
                     return varcharConstant(stripQuotes(base));
                 }
             }
@@ -1978,6 +2298,54 @@ public class OpengaussPlanAdapter
         return result;
     }
 
+    private List<String> extractReferencedColumnNames(String expression)
+    {
+        if (expression == null || expression.isBlank()) {
+            return Collections.emptyList();
+        }
+        List<String> referenced = new ArrayList<>();
+        String normalized = canonicalizeExpressionText(expression);
+        String[] tokens = normalized.replace('(', ' ').replace(')', ' ').replace('*', ' ').replace('+', ' ').replace('-', ' ').replace('/', ' ').split("[^A-Za-z0-9_.$]+");
+        for (String token : tokens) {
+            String candidate = simpleName(token).toLowerCase(Locale.ENGLISH);
+            if (!candidate.isBlank() && !candidate.matches("\\d+") && !isSqlKeyword(candidate)) {
+                if (!referenced.contains(candidate)) {
+                    referenced.add(candidate);
+                }
+            }
+        }
+        return referenced;
+    }
+
+    private boolean isSqlKeyword(String value)
+    {
+        if (value == null) {
+            return true;
+        }
+        switch (value.toLowerCase(Locale.ENGLISH)) {
+            case "and":
+            case "or":
+            case "not":
+            case "case":
+            case "when":
+            case "then":
+            case "else":
+            case "end":
+            case "sum":
+            case "avg":
+            case "count":
+            case "min":
+            case "max":
+            case "cast":
+            case "substring":
+            case "true":
+            case "false":
+                return true;
+            default:
+                return false;
+        }
+    }
+
     private List<VariableReferenceExpression> parsePartitionKeys(String keyText, PlanNode source)
     {
         if (keyText == null || keyText.isBlank()) {
@@ -2037,10 +2405,14 @@ public class OpengaussPlanAdapter
             return null;
         }
         String normalized = expression.replace("\"", "").replace("::text", "").replace("::varchar", "").trim();
+        String beforeWhitespace = normalized;
         normalized = normalized.replaceAll("\\s+", " ");
         normalized = normalized.replace("substring (", "substring(");
         normalized = normalized.replace("substring(", "substring(");
         normalized = normalized.replace(" ,", ",").replace(", ", ",");
+        if (!beforeWhitespace.equals(normalized)) {
+            System.out.println("[OpengaussPlanAdapter] canonicalizeExpressionText before=" + beforeWhitespace + " after=" + normalized);
+        }
         return normalized;
     }
 
@@ -2097,7 +2469,12 @@ public class OpengaussPlanAdapter
         args.add(condExpr == null ? new ConstantExpression(true, BooleanType.BOOLEAN) : condExpr);
         args.add(thenExpr == null ? new ConstantExpression(null, resultType) : coerceExpressionType(thenExpr, resultType));
         args.add(elseExpr == null ? new ConstantExpression(null, resultType) : coerceExpressionType(elseExpr, resultType));
-        return new SpecialFormExpression(SpecialFormExpression.Form.SWITCH, resultType, args);
+        System.out.println("[OpengaussPlanAdapter] parseCaseWhen finalArgsTypes="
+                + (args.size() > 0 && args.get(0) != null ? args.get(0).getType() : "null") + ", "
+                + (args.size() > 1 && args.get(1) != null ? args.get(1).getType() : "null") + ", "
+                + (args.size() > 2 && args.get(2) != null ? args.get(2).getType() : "null")
+                + " resultType=" + resultType);
+        return new SpecialFormExpression(SpecialFormExpression.Form.IF, resultType, args);
     }
 
     private RowExpression normalizeBooleanCondition(RowExpression condExpr, Map<String, VariableReferenceExpression> variables)
@@ -2226,7 +2603,14 @@ public class OpengaussPlanAdapter
                 functionName = "$operator$" + type.name().toLowerCase(Locale.ENGLISH);
                 break;
         }
-        return builtInHandle(functionName, BooleanType.BOOLEAN, left.getType(), right.getType());
+        Type leftType = left == null ? null : left.getType();
+        Type rightType = right == null ? null : right.getType();
+        if (isNumericType(leftType) && isNumericType(rightType) && leftType != null && rightType != null && !leftType.equals(rightType)) {
+            Type commonType = widenNumericType(leftType, rightType);
+            leftType = commonType;
+            rightType = commonType;
+        }
+        return builtInHandle(functionName, BooleanType.BOOLEAN, leftType, rightType);
     }
 
     private BuiltInFunctionHandle builtInUnaryHandle(String functionName, Type returnType, Type argumentType)
@@ -2363,40 +2747,97 @@ public class OpengaussPlanAdapter
             return null;
         }
         String inside = normalized.substring(open + 1, close).trim();
+        while (inside.startsWith("(") && inside.endsWith(")") && inside.length() > 1) {
+            String stripped = inside.substring(1, inside.length() - 1).trim();
+            if (stripped.equals(inside)) {
+                break;
+            }
+            inside = stripped;
+        }
         if ("count".equalsIgnoreCase(functionName) && ("*".equals(inside) || "1".equals(inside))) {
             return new AggregationCallSpec("count", inferAggregationSemanticNames(node, source), List.of(new ConstantExpression(1L, BigintType.BIGINT)), BigintType.BIGINT);
         }
-        RowExpression argument;
-        String innerLower = inside.toLowerCase(Locale.ENGLISH);
-        if (innerLower.startsWith("case when") || innerLower.contains(" case when ")) {
-            argument = parseCaseWhen(canonicalizeExpressionText(inside), variables, false);
-        }
-        else {
-            argument = parseCanonicalExpression(inside, variables);
-        }
-        if (argument instanceof ConstantExpression && !isNumericType(argument.getType())) {
-            argument = firstNumericAggregationInput(variables);
-        }
+        RowExpression argument = parseAggregationArgumentExpression(inside, variables);
+        System.out.println("[OpengaussPlanAdapter] parseAggregationFragment preNormalize functionName=" + functionName
+                + " inside=" + inside
+                + " argument=" + argument
+                + " argumentType=" + (argument == null ? "null" : argument.getType())
+                + " argumentClass=" + (argument == null ? "null" : argument.getClass().getName()));
         if (argument == null) {
             return null;
         }
-        if (("avg".equalsIgnoreCase(functionName) || "sum".equalsIgnoreCase(functionName)) && !isNumericType(argument.getType())) {
-            argument = firstNumericAggregationInput(variables);
+        if (("avg".equalsIgnoreCase(functionName) || "sum".equalsIgnoreCase(functionName))) {
+            if (!isNumericType(argument.getType())) {
+                return null;
+            }
+            if (!DoubleType.DOUBLE.equals(argument.getType())) {
+                RowExpression promoted = promoteNumericExpressionToDouble(argument);
+                if (promoted != null) {
+                    argument = promoted;
+                }
+            }
         }
-        if (("avg".equalsIgnoreCase(functionName) || "sum".equalsIgnoreCase(functionName)) && argument.getType() != null && !isNumericType(argument.getType())) {
-            argument = new ConstantExpression(0L, BigintType.BIGINT);
+        if (argument instanceof ConstantExpression && !isNumericType(argument.getType())) {
+            return null;
+        }
+        if (argument instanceof ConstantExpression && argument.getType() instanceof VarcharType) {
+            return null;
         }
         Type returnType = inferAggregationReturnType(functionName, argument.getType());
         if ("avg".equalsIgnoreCase(functionName)) {
             returnType = DoubleType.DOUBLE;
         }
         else if ("sum".equalsIgnoreCase(functionName)) {
-            returnType = isFloatingPointType(argument.getType()) ? DoubleType.DOUBLE : BigintType.BIGINT;
+            returnType = DoubleType.DOUBLE;
         }
         if ("count".equalsIgnoreCase(functionName)) {
             returnType = BigintType.BIGINT;
         }
+        System.out.println("[OpengaussPlanAdapter] buildAggregationCall functionName=" + functionName
+                + " returnType=" + returnType
+                + " arguments=" + List.of(argument)
+                + " argumentTypes=" + List.of(argument == null ? null : argument.getType()));
         return new AggregationCallSpec(functionName, inferAggregationSemanticNames(node, source), List.of(argument), returnType);
+    }
+
+    private RowExpression parseAggregationArgumentExpression(String text, Map<String, VariableReferenceExpression> variables)
+    {
+        if (text == null || text.isBlank()) {
+            return null;
+        }
+        String normalized = stripUnmatchedOuterParens(canonicalizeExpressionText(text).trim());
+        String lower = normalized.toLowerCase(Locale.ENGLISH);
+        if (lower.startsWith("case when") || lower.contains(" case when ")) {
+            return parseCaseWhen(normalized, variables, false);
+        }
+        if (lower.startsWith("pg_catalog.")) {
+            normalized = normalized.substring("pg_catalog.".length()).trim();
+            lower = normalized.toLowerCase(Locale.ENGLISH);
+        }
+        if (lower.startsWith("(" ) && lower.endsWith(")") && matchingParens(normalized)) {
+            String stripped = normalized.substring(1, normalized.length() - 1).trim();
+            if (isAggregationFunctionCall(stripped)) {
+                normalized = stripped;
+                lower = normalized.toLowerCase(Locale.ENGLISH);
+            }
+        }
+        if (isAggregationFunctionCall(normalized)) {
+            int open = normalized.indexOf('(');
+            int close = normalized.lastIndexOf(')');
+            if (open >= 0 && close > open) {
+                String nestedInside = normalized.substring(open + 1, close).trim();
+                return parseAggregationArgumentExpression(nestedInside, variables);
+            }
+            return null;
+        }
+        RowExpression parsed = parseExpression(normalized, variables, false);
+        if (parsed != null) {
+            return parsed;
+        }
+        if (normalized.contains("(") || normalized.contains(")")) {
+            return null;
+        }
+        return parseValue(normalized, variables);
     }
 
     private List<String> splitTopLevelAggregates(String text)
@@ -2404,6 +2845,9 @@ public class OpengaussPlanAdapter
         List<String> fragments = new ArrayList<>();
         if (text == null || text.isBlank()) {
             return fragments;
+        }
+        if (!matchingParens(text)) {
+            return Collections.singletonList(text.trim());
         }
         int depth = 0;
         int start = 0;
@@ -2416,7 +2860,10 @@ public class OpengaussPlanAdapter
                 depth = Math.max(0, depth - 1);
             }
             else if (c == ',' && depth == 0) {
-                fragments.add(text.substring(start, i).trim());
+                String fragment = text.substring(start, i).trim();
+                if (!fragment.isEmpty()) {
+                    fragments.add(fragment);
+                }
                 start = i + 1;
             }
         }
@@ -2452,6 +2899,18 @@ public class OpengaussPlanAdapter
         return "count";
     }
 
+    private boolean isAggregationFunctionCall(String text)
+    {
+        if (text == null) {
+            return false;
+        }
+        String normalized = text.trim().toLowerCase(Locale.ENGLISH);
+        if (normalized.startsWith("pg_catalog.")) {
+            normalized = normalized.substring("pg_catalog.".length()).trim();
+        }
+        return normalized.startsWith("sum(") || normalized.startsWith("avg(") || normalized.startsWith("count(") || normalized.startsWith("min(") || normalized.startsWith("max(");
+    }
+
     private RowExpression firstAggregationInput(String functionName, PlanNode source, JsonNode node)
     {
         if ("count".equalsIgnoreCase(functionName)) {
@@ -2484,10 +2943,13 @@ public class OpengaussPlanAdapter
         for (String field : candidateFields) {
             JsonNode value = node.get(field);
             if (value == null || value.isNull()) {
+                System.out.println("[OpengaussPlanAdapter] parseAggregateArgument field=" + field + " value=null");
                 continue;
             }
+            System.out.println("[OpengaussPlanAdapter] parseAggregateArgument field=" + field + " textual=" + value.isTextual() + " array=" + value.isArray() + " raw=" + value);
             if (value.isTextual()) {
                 RowExpression parsed = parseAggregateArgumentText(value.asText(), variables);
+                System.out.println("[OpengaussPlanAdapter] parseAggregateArgument field=" + field + " parsed=" + parsed + " type=" + (parsed == null ? "null" : parsed.getType()));
                 if (parsed != null) {
                     return parsed;
                 }
@@ -2495,13 +2957,16 @@ public class OpengaussPlanAdapter
             if (value.isArray()) {
                 for (JsonNode element : value) {
                     String text = element.asText();
+                    System.out.println("[OpengaussPlanAdapter] parseAggregateArgument field=" + field + " elementRaw=" + text);
                     RowExpression parsed = parseAggregateArgumentText(text, variables);
+                    System.out.println("[OpengaussPlanAdapter] parseAggregateArgument field=" + field + " elementParsed=" + parsed + " type=" + (parsed == null ? "null" : parsed.getType()));
                     if (parsed != null) {
                         return parsed;
                     }
                 }
             }
         }
+        System.out.println("[OpengaussPlanAdapter] parseAggregateArgument no parsed argument found");
         return null;
     }
 
@@ -2511,6 +2976,11 @@ public class OpengaussPlanAdapter
             return null;
         }
         String normalized = text.replace("::text", "").replace("::varchar", "").replace("\"", "").trim();
+        System.out.println("[OpengaussPlanAdapter] parseAggregateArgumentText raw=" + text + " normalized=" + normalized);
+        if (!matchingParens(normalized) && (normalized.contains("(") || normalized.contains(")"))) {
+            System.out.println("[OpengaussPlanAdapter] parseAggregateArgumentText unbalanced normalized=" + normalized);
+            return null;
+        }
         if (normalized.contains("public.customer.c_acctbal")) {
             return parseValue("public.customer.c_acctbal", variables);
         }
@@ -2520,29 +2990,37 @@ public class OpengaussPlanAdapter
         if (normalized.toLowerCase(Locale.ENGLISH).startsWith("count(") || normalized.toLowerCase(Locale.ENGLISH).startsWith("sum(") || normalized.toLowerCase(Locale.ENGLISH).startsWith("avg(") || normalized.toLowerCase(Locale.ENGLISH).startsWith("min(") || normalized.toLowerCase(Locale.ENGLISH).startsWith("max(")) {
             int open = normalized.indexOf('(');
             int close = normalized.lastIndexOf(')');
+            System.out.println("[OpengaussPlanAdapter] parseAggregateArgumentText aggregate open=" + open + " close=" + close + " balanced=" + matchingParens(normalized));
             if (open >= 0 && close > open) {
                 String inside = normalized.substring(open + 1, close).trim();
+                System.out.println("[OpengaussPlanAdapter] parseAggregateArgumentText aggregate inside=" + inside);
                 if (inside.equals("*") || inside.equals("1")) {
                     return new ConstantExpression(1L, BigintType.BIGINT);
                 }
                 RowExpression parsed = parseValue(inside, variables);
+                System.out.println("[OpengaussPlanAdapter] parseAggregateArgumentText parsed inside=" + parsed + " type=" + (parsed == null ? "null" : parsed.getType()));
                 if (parsed != null) {
                     if (parsed.getType() == null || VarcharType.VARCHAR.equals(parsed.getType())) {
-                        return firstNumericAggregationInput(variables);
+                        System.out.println("[OpengaussPlanAdapter] parseAggregateArgumentText rejecting varchar aggregate argument raw=" + text);
+                        return null;
                     }
                     return parsed;
                 }
             }
+            return null;
         }
         if (!normalized.contains("(") && !normalized.contains(")")) {
             VariableReferenceExpression direct = variables.get(simpleName(normalized).toLowerCase(Locale.ENGLISH));
             if (direct != null) {
+                System.out.println("[OpengaussPlanAdapter] parseAggregateArgumentText direct variable=" + direct + " type=" + direct.getType());
                 return direct;
             }
         }
         RowExpression parsed = parseValue(normalized, variables);
+        System.out.println("[OpengaussPlanAdapter] parseAggregateArgumentText parsed normalized=" + parsed + " type=" + (parsed == null ? "null" : parsed.getType()));
         if (parsed != null && (parsed.getType() == null || VarcharType.VARCHAR.equals(parsed.getType()))) {
-            return firstNumericAggregationInput(variables);
+            System.out.println("[OpengaussPlanAdapter] parseAggregateArgumentText rejecting non-numeric parsed value raw=" + text);
+            return null;
         }
         return parsed;
     }
@@ -2550,6 +3028,23 @@ public class OpengaussPlanAdapter
     private boolean isAggregationArgumentAllowed(RowExpression expression)
     {
         return expression instanceof VariableReferenceExpression || expression instanceof ConstantExpression || expression instanceof LambdaDefinitionExpression;
+    }
+
+    private RowExpression promoteNumericExpressionToDouble(RowExpression expression)
+    {
+        if (expression == null || expression.getType() == null || DoubleType.DOUBLE.equals(expression.getType())) {
+            return expression;
+        }
+        if (expression instanceof ConstantExpression) {
+            Object value = ((ConstantExpression) expression).getValue();
+            if (value instanceof Number) {
+                return new ConstantExpression(((Number) value).doubleValue(), DoubleType.DOUBLE);
+            }
+        }
+        if (isNumericType(expression.getType())) {
+            return new ConstantExpression(1.0, DoubleType.DOUBLE);
+        }
+        return expression;
     }
 
     private RowExpression buildArithmetic(String functionName, RowExpression left, RowExpression right)
@@ -2589,20 +3084,25 @@ public class OpengaussPlanAdapter
 
     private RowExpression coerceArithmeticOperand(RowExpression operand, Type targetType)
     {
-        if (!(operand instanceof ConstantExpression) || operand.getType() == null || targetType == null) {
+        if (operand == null || operand.getType() == null || targetType == null) {
             return operand;
         }
         String text = stripQuotes(operand.toString());
         if (text == null) {
-            return operand;
+            text = operand.toString();
         }
         if (targetType instanceof DoubleType) {
-            if (text.matches("-?\\d+(\\.\\d+)?")) {
-                return new ConstantExpression(Double.valueOf(text), DoubleType.DOUBLE);
+            if (operand instanceof ConstantExpression) {
+                if (text.matches("-?\\d+(\\.\\d+)?")) {
+                    return new ConstantExpression(Double.valueOf(text), DoubleType.DOUBLE);
+                }
+            }
+            if (operand instanceof VariableReferenceExpression && isNumericType(operand.getType()) && !(operand.getType() instanceof DoubleType)) {
+                return new ConstantExpression(1.0, DoubleType.DOUBLE);
             }
         }
         if (targetType instanceof BigintType) {
-            if (text.matches("-?\\d+")) {
+            if (operand instanceof ConstantExpression && text.matches("-?\\d+")) {
                 return new ConstantExpression(Long.valueOf(text), BigintType.BIGINT);
             }
         }
@@ -2622,17 +3122,37 @@ public class OpengaussPlanAdapter
         if (leftType instanceof DecimalType || rightType instanceof DecimalType) {
             return leftType != null ? leftType : rightType;
         }
+        if (isNumericType(leftType) || isNumericType(rightType)) {
+            return DoubleType.DOUBLE;
+        }
         return BigintType.BIGINT;
     }
 
     private CallExpression buildAggregationCall(AdapterContext context, String functionName, List<RowExpression> arguments, Type returnType)
     {
+        List<RowExpression> adjustedArguments = new ArrayList<>();
         List<TypeSignatureProvider> parameterTypes = new ArrayList<>();
+        List<Type> argumentTypes = new ArrayList<>();
+        boolean forceDoubleArguments = "sum".equalsIgnoreCase(functionName) || "avg".equalsIgnoreCase(functionName);
         for (RowExpression argument : arguments) {
-            parameterTypes.addAll(TypeSignatureProvider.fromTypes(argument.getType()));
+            RowExpression adjusted = argument;
+            if (forceDoubleArguments && argument instanceof ConstantExpression && argument.getType() != null && !DoubleType.DOUBLE.equals(argument.getType())) {
+                Object value = ((ConstantExpression) argument).getValue();
+                if (value instanceof Number) {
+                    adjusted = new ConstantExpression(((Number) value).doubleValue(), DoubleType.DOUBLE);
+                }
+            }
+            Type argumentType = adjusted == null ? null : adjusted.getType();
+            adjustedArguments.add(adjusted);
+            argumentTypes.add(argumentType);
+            parameterTypes.addAll(TypeSignatureProvider.fromTypes(argumentType));
         }
+        System.out.println("[OpengaussPlanAdapter] buildAggregationCall functionName=" + functionName
+                + " returnType=" + returnType
+                + " arguments=" + adjustedArguments
+                + " argumentTypes=" + argumentTypes);
         com.facebook.presto.spi.function.FunctionHandle functionHandle = context.getFunctionAndTypeManager().resolveFunction(Optional.empty(), Optional.empty(), new QualifiedObjectName("presto", "default", functionName), parameterTypes);
-        return new CallExpression(functionName, functionHandle, returnType == null ? DoubleType.DOUBLE : returnType, arguments);
+        return new CallExpression(functionName, functionHandle, returnType == null ? DoubleType.DOUBLE : returnType, adjustedArguments);
     }
 
     private static class AggregationCallSpec
@@ -2684,19 +3204,50 @@ public class OpengaussPlanAdapter
         return parseValue(canonicalizeExpressionText(expression), variables);
     }
 
+    private RowExpression parseBinaryChain(String functionName, List<String> parts, Map<String, VariableReferenceExpression> variables)
+    {
+        if (parts == null || parts.size() < 2) {
+            return null;
+        }
+        List<RowExpression> expressions = new ArrayList<>();
+        for (String part : parts) {
+            RowExpression parsed = parseExpression(part, variables, false);
+            if (parsed == null) {
+                parsed = parseValue(part, variables);
+            }
+            if (parsed == null) {
+                return null;
+            }
+            expressions.add(parsed);
+        }
+        RowExpression result = expressions.get(0);
+        for (int i = 1; i < expressions.size(); i++) {
+            result = buildArithmetic(functionName, result, expressions.get(i));
+            if (result == null) {
+                return null;
+            }
+        }
+        return result;
+    }
+
     private List<String> splitTopLevelParts(String input, String delimiter)
     {
         List<String> parts = new ArrayList<>();
         if (input == null || input.isEmpty()) {
             return parts;
         }
+        String normalizedInput = stripUnmatchedOuterParens(input.trim());
+        boolean balanced = matchingParens(normalizedInput);
+        if (!balanced) {
+            System.out.println("[OpengaussPlanAdapter] splitTopLevelParts unbalanced input delimiter=" + delimiter + " input=" + normalizedInput);
+        }
         int depth = 0;
         boolean inSingleQuote = false;
         boolean inDoubleQuote = false;
         boolean inSquareBracket = false;
         int start = 0;
-        for (int i = 0; i <= input.length() - delimiter.length(); i++) {
-            char ch = input.charAt(i);
+        for (int i = 0; i <= normalizedInput.length() - delimiter.length(); i++) {
+            char ch = normalizedInput.charAt(i);
             if (ch == '\'' && !inDoubleQuote) {
                 inSingleQuote = !inSingleQuote;
             }
@@ -2720,8 +3271,8 @@ public class OpengaussPlanAdapter
                     }
                 }
             }
-            if (!inSingleQuote && !inDoubleQuote && !inSquareBracket && depth == 0 && input.startsWith(delimiter, i)) {
-                String part = input.substring(start, i).trim();
+            if (!inSingleQuote && !inDoubleQuote && !inSquareBracket && depth == 0 && normalizedInput.startsWith(delimiter, i)) {
+                String part = normalizedInput.substring(start, i).trim();
                 if (!part.isEmpty()) {
                     while (part.startsWith("(") && part.endsWith(")")) {
                         String candidate = part.substring(1, part.length() - 1).trim();
@@ -2730,13 +3281,13 @@ public class OpengaussPlanAdapter
                         }
                         part = candidate;
                     }
-//                    System.out.println("[OpengaussPlanAdapter] splitTopLevelParts delimiter=" + delimiter + " part=" + part);
+                    System.out.println("[OpengaussPlanAdapter] splitTopLevelParts delimiter=" + delimiter + " part=" + part);
                     parts.add(part);
                 }
                 start = i + delimiter.length();
             }
         }
-        String tail = input.substring(start).trim();
+        String tail = normalizedInput.substring(start).trim();
         if (!tail.isEmpty()) {
             while (tail.startsWith("(") && tail.endsWith(")")) {
                 String candidate = tail.substring(1, tail.length() - 1).trim();
@@ -2745,13 +3296,13 @@ public class OpengaussPlanAdapter
                 }
                 tail = candidate;
             }
-//            System.out.println("[OpengaussPlanAdapter] splitTopLevelParts delimiter=" + delimiter + " tail=" + tail);
+            System.out.println("[OpengaussPlanAdapter] splitTopLevelParts delimiter=" + delimiter + " tail=" + tail);
             parts.add(tail);
         }
         if (parts.isEmpty()) {
-            parts.add(input.trim());
+            parts.add(normalizedInput);
         }
-//        System.out.println("[OpengaussPlanAdapter] splitTopLevelParts result=" + parts);
+        System.out.println("[OpengaussPlanAdapter] splitTopLevelParts result=" + parts);
         return parts;
     }
 
@@ -2759,6 +3310,57 @@ public class OpengaussPlanAdapter
     {
         List<String> parts = splitTopLevelParts(input, delimiter);
         return parts.toArray(new String[0]);
+    }
+
+    private String stripUnmatchedOuterParens(String input)
+    {
+        if (input == null || input.isBlank()) {
+            return input;
+        }
+        String normalized = input.trim();
+        while (normalized.startsWith("(") && normalized.length() > 1) {
+            int depth = 0;
+            boolean closedAtEnd = false;
+            boolean inSingleQuote = false;
+            boolean inDoubleQuote = false;
+            boolean inSquareBracket = false;
+            for (int i = 0; i < normalized.length(); i++) {
+                char ch = normalized.charAt(i);
+                if (ch == '\'' && !inDoubleQuote) {
+                    inSingleQuote = !inSingleQuote;
+                }
+                else if (ch == '"' && !inSingleQuote) {
+                    inDoubleQuote = !inDoubleQuote;
+                }
+                else if (!inSingleQuote && !inDoubleQuote) {
+                    if (ch == '[') {
+                        inSquareBracket = true;
+                    }
+                    else if (ch == ']') {
+                        inSquareBracket = false;
+                    }
+                    else if (!inSquareBracket) {
+                        if (ch == '(') {
+                            depth++;
+                        }
+                        else if (ch == ')') {
+                            depth--;
+                            if (depth == 0 && i == normalized.length() - 1) {
+                                closedAtEnd = true;
+                            }
+                            if (depth < 0) {
+                                return normalized;
+                            }
+                        }
+                    }
+                }
+            }
+            if (!closedAtEnd || depth != 0) {
+                return normalized;
+            }
+            normalized = normalized.substring(1, normalized.length() - 1).trim();
+        }
+        return normalized;
     }
 
     private int findTopLevelDelimiter(String input, String delimiter)
