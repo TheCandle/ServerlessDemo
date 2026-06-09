@@ -421,9 +421,9 @@ public class OpengaussPlanAdapter
 
         PlanNode left = translateNode(leftJson, context, scalarBindings);
         PlanNode right = translateNode(rightJson, context, scalarBindings);
-        List<EquiJoinClause> criteria = parseJoinCriteria(firstNonNull(text(node, "Hash Cond"), text(node, "Merge Cond")), left, right);
-        if (criteria.isEmpty()) {
-        }
+        String joinCondition = firstNonNull(text(node, "Hash Cond"), text(node, "Merge Cond"), text(node, "Join Filter"));
+        List<EquiJoinClause> criteria = parseJoinCriteria(joinCondition, left, right);
+        right = ensureJoinBuildSideExchange(right, criteria, context);
         List<VariableReferenceExpression> outputVariables = new ArrayList<>(left.getOutputVariables());
         outputVariables.addAll(right.getOutputVariables());
 
@@ -467,12 +467,80 @@ public class OpengaussPlanAdapter
         PlanNode source = translateNode(child, context, scalarBindings);
         String type = text(node, "Node Type");
         String normalized = type == null ? "" : type.toLowerCase(Locale.ENGLISH);
-        if (normalized.contains("replicate") || normalized.contains("gather") || normalized.contains("redistribute") || normalized.contains("exchange")) {
-            // The TPCH connector already preserves the source distribution for these plans,
-            // and adding another exchange can conflict with the existing SOURCE distribution.
-            return source;
+        if (normalized.contains("redistribute")) {
+            return ensurePartitionedExchange(source, node, context);
+        }
+        if (normalized.contains("replicate")) {
+            return ensureReplicatedExchange(source, context);
+        }
+        if (normalized.contains("gather")) {
+            return ensureGatherExchange(source, context);
         }
         return source;
+    }
+
+    private PlanNode ensureLocalGatherExchange(PlanNode source, AdapterContext context)
+    {
+        // Keep OpenGauss output wrappers transparent unless a downstream operator
+        // explicitly forces a single-node distribution. This prevents accidental
+        // SOURCE -> SINGLE rewrites during adapter output shaping.
+        return source;
+    }
+
+    private PlanNode ensureGatherExchange(PlanNode source, AdapterContext context)
+    {
+        return source;
+    }
+
+    private PlanNode ensureReplicatedExchange(PlanNode source, AdapterContext context)
+    {
+        if (source == null || source instanceof ExchangeNode) {
+            return source;
+        }
+        return ExchangeNode.replicatedExchange(context.getIdAllocator().getNextId(), ExchangeNode.Scope.REMOTE_STREAMING, source);
+    }
+
+    private PlanNode ensurePartitionedExchange(PlanNode source, JsonNode node, AdapterContext context)
+    {
+        if (source == null) {
+            return null;
+        }
+        if (source instanceof ExchangeNode) {
+            return source;
+        }
+        // Presto's exchange implementation expects connector-owned partitioning
+        // handles in some paths. The OpenGauss plan frequently marks internal
+        // redistribution stages that are not real Presto repartition boundaries,
+        // so we keep them transparent unless a later join/aggregation stage
+        // explicitly requires a different layout.
+        return source;
+    }
+
+    private PlanNode ensureJoinBuildSideExchange(PlanNode source, List<EquiJoinClause> criteria, AdapterContext context)
+    {
+        if (source == null || source instanceof ExchangeNode || criteria == null || criteria.isEmpty()) {
+            return source;
+        }
+
+        List<VariableReferenceExpression> partitioningColumns = new ArrayList<>();
+        for (EquiJoinClause clause : criteria) {
+            if (clause != null && clause.getRight() != null && !partitioningColumns.contains(clause.getRight())) {
+                partitioningColumns.add(clause.getRight());
+            }
+        }
+        if (partitioningColumns.isEmpty()) {
+            return source;
+        }
+
+        // Build side of an inner/hash join needs a local hash distribution so the
+        // join operator can consume a properly grouped input without rewriting the
+        // connector-level source distribution.
+        return ExchangeNode.partitionedExchange(
+                context.getIdAllocator().getNextId(),
+                ExchangeNode.Scope.LOCAL,
+                source,
+                Partitioning.create(SystemPartitioningHandle.FIXED_HASH_DISTRIBUTION, partitioningColumns),
+                Optional.empty());
     }
 
     private PlanNode buildProject(JsonNode node, AdapterContext context, Map<String, VariableReferenceExpression> scalarBindings)
@@ -1203,7 +1271,9 @@ public class OpengaussPlanAdapter
             for (VariableReferenceExpression variable : source.getOutputVariables()) {
                 sourceNames.add(variable.getName());
             }
-            return sourceNames;
+            if (!sourceNames.isEmpty()) {
+                return sourceNames;
+            }
         }
         return Collections.emptyList();
     }
@@ -1405,9 +1475,6 @@ public class OpengaussPlanAdapter
             }
         }
         RowExpression parsed = parseValue(normalized, variables);
-        if (parsed != null && !isNumericType(parsed.getType()) && parsed.getType() instanceof VarcharType) {
-            return firstNumericAggregationInput(variables);
-        }
         return parsed;
     }
 
@@ -1420,7 +1487,7 @@ public class OpengaussPlanAdapter
                 return variable;
             }
         }
-        return new ConstantExpression(0L, BigintType.BIGINT);
+        return null;
     }
 
     private RowExpression parseSubstringInList(String normalized, Map<String, VariableReferenceExpression> variables)
@@ -2211,6 +2278,12 @@ public class OpengaussPlanAdapter
 
     private Optional<TableHandle> resolveTableHandle(Metadata metadata, Session session, QualifiedObjectName qname)
     {
+        String catalogName = qname.getCatalogName();
+        if (catalogName != null && catalogName.toLowerCase(Locale.ENGLISH).contains("info_schema")) {
+            System.out.println("[OpengaussPlanAdapter] skip info_schema table handle resolution for qname=" + qname);
+            return Optional.empty();
+        }
+
         Optional<TableHandle> handle = metadata.getHandleVersion(session, qname, Optional.empty());
         if (handle.isPresent()) {
             return handle;
@@ -2757,6 +2830,13 @@ public class OpengaussPlanAdapter
         if ("count".equalsIgnoreCase(functionName) && ("*".equals(inside) || "1".equals(inside))) {
             return new AggregationCallSpec("count", inferAggregationSemanticNames(node, source), List.of(new ConstantExpression(1L, BigintType.BIGINT)), BigintType.BIGINT);
         }
+        if (isAggregationFunctionCall(inside)) {
+            int nestedOpen = inside.indexOf('(');
+            int nestedClose = inside.lastIndexOf(')');
+            if (nestedOpen >= 0 && nestedClose > nestedOpen) {
+                inside = inside.substring(nestedOpen + 1, nestedClose).trim();
+            }
+        }
         RowExpression argument = parseAggregationArgumentExpression(inside, variables);
         System.out.println("[OpengaussPlanAdapter] parseAggregationFragment preNormalize functionName=" + functionName
                 + " inside=" + inside
@@ -2764,6 +2844,9 @@ public class OpengaussPlanAdapter
                 + " argumentType=" + (argument == null ? "null" : argument.getType())
                 + " argumentClass=" + (argument == null ? "null" : argument.getClass().getName()));
         if (argument == null) {
+            return null;
+        }
+        if (argument instanceof ConstantExpression && argument.getType() instanceof VarcharType && containsAggregationFunction(inside.toLowerCase(Locale.ENGLISH))) {
             return null;
         }
         if (("avg".equalsIgnoreCase(functionName) || "sum".equalsIgnoreCase(functionName))) {
@@ -2814,30 +2897,84 @@ public class OpengaussPlanAdapter
             normalized = normalized.substring("pg_catalog.".length()).trim();
             lower = normalized.toLowerCase(Locale.ENGLISH);
         }
-        if (lower.startsWith("(" ) && lower.endsWith(")") && matchingParens(normalized)) {
-            String stripped = normalized.substring(1, normalized.length() - 1).trim();
-            if (isAggregationFunctionCall(stripped)) {
-                normalized = stripped;
-                lower = normalized.toLowerCase(Locale.ENGLISH);
-            }
-        }
+
+        // If we are handed another aggregation call (for example, sum(sum(x)) or
+        // avg(avg(x))), peel it until we reach the real underlying argument. This
+        // avoids accidentally parsing the nested aggregate as a literal constant.
         if (isAggregationFunctionCall(normalized)) {
             int open = normalized.indexOf('(');
             int close = normalized.lastIndexOf(')');
             if (open >= 0 && close > open) {
                 String nestedInside = normalized.substring(open + 1, close).trim();
-                return parseAggregationArgumentExpression(nestedInside, variables);
+                while (nestedInside.startsWith("(") && nestedInside.endsWith(")") && matchingParens(nestedInside)) {
+                    nestedInside = nestedInside.substring(1, nestedInside.length() - 1).trim();
+                }
+                if (isAggregationFunctionCall(nestedInside) || nestedInside.toLowerCase(Locale.ENGLISH).startsWith("pg_catalog.")) {
+                    return parseAggregationArgumentExpression(nestedInside, variables);
+                }
+                RowExpression nested = parseExpression(nestedInside, variables, false);
+                if (nested != null) {
+                    return nested;
+                }
+                nested = parseValue(nestedInside, variables);
+                if (nested != null && !(nested instanceof ConstantExpression && nested.toString().toLowerCase(Locale.ENGLISH).contains("sum("))) {
+                    return nested;
+                }
             }
             return null;
         }
+
+        if (isAggregationFunctionCall(normalized)) {
+            int open = normalized.indexOf('(');
+            int close = normalized.lastIndexOf(')');
+            if (open >= 0 && close > open) {
+                String nestedInside = normalized.substring(open + 1, close).trim();
+                RowExpression nested = parseAggregationArgumentExpression(nestedInside, variables);
+                if (nested != null) {
+                    return nested;
+                }
+            }
+            return null;
+        }
+
+        VariableReferenceExpression exact = variables.get(normalized.toLowerCase(Locale.ENGLISH));
+        if (exact != null) {
+            return exact;
+        }
+        String simple = simpleName(normalized).toLowerCase(Locale.ENGLISH);
+        exact = variables.get(simple);
+        if (exact != null) {
+            return exact;
+        }
+
+        // For simple column-like identifiers, prefer a direct variable lookup before
+        // trying the generic expression parser, which can sometimes degrade them
+        // into constants during nested aggregate rewriting.
+        if (!normalized.contains("(") && !normalized.contains(")") && !normalized.contains(" ")) {
+            VariableReferenceExpression direct = lookupVariable(normalized, variables);
+            if (direct != null) {
+                return direct;
+            }
+        }
+
         RowExpression parsed = parseExpression(normalized, variables, false);
+        if (parsed instanceof VariableReferenceExpression) {
+            return parsed;
+        }
+        if (parsed instanceof ConstantExpression) {
+            return null;
+        }
         if (parsed != null) {
             return parsed;
         }
+
+        // For aggregation arguments, do not fall back to parsing bare identifiers
+        // as string literals. If we cannot resolve it as an actual expression or
+        // variable reference, treat it as unresolved so the caller can drop it.
         if (normalized.contains("(") || normalized.contains(")")) {
             return null;
         }
-        return parseValue(normalized, variables);
+        return null;
     }
 
     private List<String> splitTopLevelAggregates(String text)
@@ -2975,7 +3112,7 @@ public class OpengaussPlanAdapter
         if (text == null || text.isBlank()) {
             return null;
         }
-        String normalized = text.replace("::text", "").replace("::varchar", "").replace("\"", "").trim();
+        String normalized = stripUnmatchedOuterParens(text.replace("::text", "").replace("::varchar", "").replace("\"", "").trim());
         System.out.println("[OpengaussPlanAdapter] parseAggregateArgumentText raw=" + text + " normalized=" + normalized);
         if (!matchingParens(normalized) && (normalized.contains("(") || normalized.contains(")"))) {
             System.out.println("[OpengaussPlanAdapter] parseAggregateArgumentText unbalanced normalized=" + normalized);
@@ -2984,27 +3121,38 @@ public class OpengaussPlanAdapter
         if (normalized.contains("public.customer.c_acctbal")) {
             return parseValue("public.customer.c_acctbal", variables);
         }
-        if (normalized.contains("count(*)") || normalized.contains("count(1)")) {
+        if (normalized.equalsIgnoreCase("count(*)") || normalized.equalsIgnoreCase("count(1)")) {
             return new ConstantExpression(1L, BigintType.BIGINT);
         }
-        if (normalized.toLowerCase(Locale.ENGLISH).startsWith("count(") || normalized.toLowerCase(Locale.ENGLISH).startsWith("sum(") || normalized.toLowerCase(Locale.ENGLISH).startsWith("avg(") || normalized.toLowerCase(Locale.ENGLISH).startsWith("min(") || normalized.toLowerCase(Locale.ENGLISH).startsWith("max(")) {
+
+        if (isAggregationFunctionCall(normalized)) {
             int open = normalized.indexOf('(');
             int close = normalized.lastIndexOf(')');
             System.out.println("[OpengaussPlanAdapter] parseAggregateArgumentText aggregate open=" + open + " close=" + close + " balanced=" + matchingParens(normalized));
             if (open >= 0 && close > open) {
-                String inside = normalized.substring(open + 1, close).trim();
+                String inside = stripUnmatchedOuterParens(normalized.substring(open + 1, close).trim());
                 System.out.println("[OpengaussPlanAdapter] parseAggregateArgumentText aggregate inside=" + inside);
                 if (inside.equals("*") || inside.equals("1")) {
                     return new ConstantExpression(1L, BigintType.BIGINT);
                 }
-                RowExpression parsed = parseValue(inside, variables);
-                System.out.println("[OpengaussPlanAdapter] parseAggregateArgumentText parsed inside=" + parsed + " type=" + (parsed == null ? "null" : parsed.getType()));
-                if (parsed != null) {
-                    if (parsed.getType() == null || VarcharType.VARCHAR.equals(parsed.getType())) {
+                if (isAggregationFunctionCall(inside)) {
+                    RowExpression nested = parseAggregateArgumentText(inside, variables);
+                    System.out.println("[OpengaussPlanAdapter] parseAggregateArgumentText nested aggregate parsed=" + nested + " type=" + (nested == null ? "null" : nested.getType()));
+                    if (nested != null) {
+                        return nested;
+                    }
+                }
+                RowExpression parsedInside = parseExpression(inside, variables, false);
+                if (parsedInside == null) {
+                    parsedInside = parseValue(inside, variables);
+                }
+                System.out.println("[OpengaussPlanAdapter] parseAggregateArgumentText parsed inside=" + parsedInside + " type=" + (parsedInside == null ? "null" : parsedInside.getType()));
+                if (parsedInside != null) {
+                    if (parsedInside.getType() == null || VarcharType.VARCHAR.equals(parsedInside.getType())) {
                         System.out.println("[OpengaussPlanAdapter] parseAggregateArgumentText rejecting varchar aggregate argument raw=" + text);
                         return null;
                     }
-                    return parsed;
+                    return parsedInside;
                 }
             }
             return null;
@@ -3016,7 +3164,10 @@ public class OpengaussPlanAdapter
                 return direct;
             }
         }
-        RowExpression parsed = parseValue(normalized, variables);
+        RowExpression parsed = parseExpression(normalized, variables, false);
+        if (parsed == null) {
+            parsed = parseValue(normalized, variables);
+        }
         System.out.println("[OpengaussPlanAdapter] parseAggregateArgumentText parsed normalized=" + parsed + " type=" + (parsed == null ? "null" : parsed.getType()));
         if (parsed != null && (parsed.getType() == null || VarcharType.VARCHAR.equals(parsed.getType()))) {
             System.out.println("[OpengaussPlanAdapter] parseAggregateArgumentText rejecting non-numeric parsed value raw=" + text);
