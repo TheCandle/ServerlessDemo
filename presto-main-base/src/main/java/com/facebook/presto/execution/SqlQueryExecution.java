@@ -1071,9 +1071,28 @@ public class SqlQueryExecution
 
             Plan plan;
             if (isOpengaussExternalPlanEnabled()) {
-                plan = getSession().getRuntimeStats().recordWallAndCpuTime(
-                        OPTIMIZER_TIME_NANOS,
-                        () -> new Plan(planNode, com.facebook.presto.sql.planner.TypeProvider.fromVariables(planNode.getOutputVariables()), com.facebook.presto.cost.StatsAndCosts.empty()));
+                String sql = this.query.trim().toLowerCase(Locale.ENGLISH);
+                if(sql.matches("select\\s+(?:[1-9]|1\\d|2[0-2])")) {
+                    plan = getSession().getRuntimeStats().recordWallAndCpuTime(
+                            OPTIMIZER_TIME_NANOS,
+                            () -> new Plan(planNode, com.facebook.presto.sql.planner.TypeProvider.fromVariables(planNode.getOutputVariables()), com.facebook.presto.cost.StatsAndCosts.empty()));
+
+                } else {
+                    Optimizer optimizer = new Optimizer(
+                            stateMachine.getSession(),
+                            metadata,
+                            planOptimizers,
+                            planChecker,
+                            analyzerContext.getVariableAllocator(),
+                            idAllocator,
+                            stateMachine.getWarningCollector(),
+                            statsCalculator,
+                            costCalculator,
+                            false);
+                    plan = getSession().getRuntimeStats().recordWallAndCpuTime(
+                            OPTIMIZER_TIME_NANOS,
+                            () -> optimizer.validateAndOptimizePlan(planNode, OPTIMIZED_AND_VALIDATED));
+                }
             }
             else {
                 Optimizer optimizer = new Optimizer(

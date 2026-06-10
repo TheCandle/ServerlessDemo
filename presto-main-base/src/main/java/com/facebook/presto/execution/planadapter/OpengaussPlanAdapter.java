@@ -33,7 +33,6 @@ import com.facebook.presto.sql.tree.Cast;
 import com.facebook.presto.sql.tree.ComparisonExpression;
 import com.facebook.presto.sql.tree.DoubleLiteral;
 import com.facebook.presto.sql.tree.Expression;
-import com.facebook.presto.sql.ExpressionUtils;
 import com.facebook.presto.sql.tree.FunctionCall;
 import com.facebook.presto.sql.tree.Identifier;
 import com.facebook.presto.sql.tree.LogicalBinaryExpression;
@@ -88,6 +87,13 @@ import java.util.Optional;
 
 public class OpengaussPlanAdapter
 {
+//    private static final boolean DEBUG_OUTPUT_ENABLED = Boolean.parseBoolean(firstNonNullStatic(System.getProperty("opengauss.plan.debug.output"), System.getenv("OPENGAUSS_PLAN_DEBUG_OUTPUT"), "false"));
+//    private static final String DEBUG_OUTPUT_TARGET_PLAN_ID = firstNonNullStatic(System.getProperty("opengauss.plan.debug.planid"), System.getenv("OPENGAUSS_PLAN_DEBUG_PLANID"));
+    private static final boolean DEBUG_OUTPUT_ENABLED = false;
+    private static final String DEBUG_OUTPUT_TARGET_PLAN_ID = "3";
+
+
+
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final OpengaussExpressionTranslator expressionTranslator = new OpengaussExpressionTranslator();
     private final SqlParser sqlParser = new SqlParser();
@@ -121,8 +127,10 @@ public class OpengaussPlanAdapter
             Map<String, VariableReferenceExpression> scalarBindings = new LinkedHashMap<>();
             JsonNode planRoot = unwrapPlan(root);
             PlanNode translated = translateNode(planRoot, context, scalarBindings);
+            translated = insertDebugOutputAtPlanId(translated, context);
             OutputNode outputNode = wrapWithOutputNode(translated, planRoot, context);
-            System.out.println("[OpengaussPlanAdapter] translated plan tree:\n" + formatPlanTree(outputNode));
+            System.out.println("[OpengaussPlanAdapter] converted plan tree:\n" + formatPlanTree(outputNode));
+            System.out.println("[OpengaussPlanAdapter] converted plan debug details:\n" + formatPlanNodeDetails(outputNode));
             return outputNode;
         }
         catch (IOException e) {
@@ -973,6 +981,64 @@ public class OpengaussPlanAdapter
         return wrapWithOutputNode(planNode, node, context);
     }
 
+    private boolean shouldInsertDebugOutput(JsonNode planRoot)
+    {
+        return DEBUG_OUTPUT_ENABLED && DEBUG_OUTPUT_TARGET_PLAN_ID != null && !DEBUG_OUTPUT_TARGET_PLAN_ID.isBlank();
+    }
+
+    private PlanNode insertDebugOutputAtPlanId(PlanNode planNode, AdapterContext context)
+    {
+        if (!DEBUG_OUTPUT_ENABLED || DEBUG_OUTPUT_TARGET_PLAN_ID == null || DEBUG_OUTPUT_TARGET_PLAN_ID.isBlank() || planNode == null) {
+            return planNode;
+        }
+        PlanNode target = findDebugTargetNode(planNode);
+        if (target == null) {
+            System.out.println("[OpengaussPlanAdapter] debug OutputNode target not found in converted plan tree planId=" + DEBUG_OUTPUT_TARGET_PLAN_ID
+                    + " root=" + planNode.getId());
+            return planNode;
+        }
+
+        List<VariableReferenceExpression> outputVariables = target.getOutputVariables();
+        List<String> columnNames = new ArrayList<>();
+        for (VariableReferenceExpression variable : outputVariables) {
+            columnNames.add(variable.getName());
+        }
+        OutputNode debugOutput = new OutputNode(Optional.empty(), context.getIdAllocator().getNextId(), target, columnNames, outputVariables);
+        System.out.println("[OpengaussPlanAdapter] debug output node created for converted planId=" + target.getId()
+                + " outputs=" + outputVariables
+                + " columns=" + columnNames);
+        System.out.println("[OpengaussPlanAdapter] inserted debug OutputNode at converted planId=" + DEBUG_OUTPUT_TARGET_PLAN_ID
+                + " tree=\n" + formatPlanTree(debugOutput));
+        return debugOutput;
+    }
+
+    private PlanNode findDebugTargetNode(PlanNode planNode)
+    {
+        if (planNode == null) {
+            return null;
+        }
+        if (matchesDebugPlanId(planNode)) {
+            return planNode;
+        }
+        for (PlanNode source : planNode.getSources()) {
+            PlanNode found = findDebugTargetNode(source);
+            if (found != null) {
+                return found;
+            }
+        }
+        return null;
+    }
+
+    private boolean matchesDebugPlanId(PlanNode planNode)
+    {
+        return planNode != null && planNode.getId() != null && DEBUG_OUTPUT_TARGET_PLAN_ID.equalsIgnoreCase(planNode.getId().toString());
+    }
+
+    private PlanNode rewritePlanNodeSources(PlanNode planNode, List<PlanNode> newSources, AdapterContext context)
+    {
+        return planNode;
+    }
+
     private OutputNode wrapWithOutputNode(PlanNode planNode, JsonNode node, AdapterContext context)
     {
         if (planNode instanceof OutputNode) {
@@ -1333,13 +1399,130 @@ public class OpengaussPlanAdapter
                 .append("[")
                 .append(node.getId())
                 .append("] outputs=")
-                .append(node.getOutputVariables());
-        if (node instanceof OutputNode) {
-            builder.append(" columns=").append(((OutputNode) node).getColumnNames());
-        }
-        builder.append('\n');
+                .append(node.getOutputVariables())
+                .append('\n');
         for (PlanNode source : node.getSources()) {
             formatPlanTree(source, builder, depth + 1);
+        }
+    }
+
+    private String formatPlanNodeDetails(PlanNode node)
+    {
+        StringBuilder builder = new StringBuilder();
+        formatPlanNodeDetails(node, builder, 0);
+        return builder.toString();
+    }
+
+    private void formatPlanNodeDetails(PlanNode node, StringBuilder builder, int depth)
+    {
+        if (node == null) {
+            return;
+        }
+        for (int i = 0; i < depth; i++) {
+            builder.append("  ");
+        }
+        builder.append(node.getClass().getSimpleName())
+                .append("[")
+                .append(node.getId())
+                .append("] outputs=")
+                .append(node.getOutputVariables())
+                .append('\n');
+        if (node instanceof ProjectNode) {
+            ProjectNode projectNode = (ProjectNode) node;
+            for (int i = 0; i < depth + 1; i++) {
+                builder.append("  ");
+            }
+            builder.append("assignments\n");
+            for (Map.Entry<VariableReferenceExpression, RowExpression> entry : projectNode.getAssignments().entrySet()) {
+                for (int i = 0; i < depth + 2; i++) {
+                    builder.append("  ");
+                }
+                builder.append(entry.getKey())
+                        .append(" := ")
+                        .append(entry.getValue())
+                        .append(" | exprType=")
+                        .append(entry.getValue() == null ? "null" : entry.getValue().getClass().getSimpleName())
+                        .append('\n');
+            }
+        }
+        else if (node instanceof FilterNode) {
+            FilterNode filterNode = (FilterNode) node;
+            for (int i = 0; i < depth + 1; i++) {
+                builder.append("  ");
+            }
+            builder.append("predicate=")
+                    .append(filterNode.getPredicate())
+                    .append(" | exprType=")
+                    .append(filterNode.getPredicate() == null ? "null" : filterNode.getPredicate().getClass().getSimpleName())
+                    .append('\n');
+        }
+        else if (node instanceof SortNode) {
+            SortNode sortNode = (SortNode) node;
+            for (int i = 0; i < depth + 1; i++) {
+                builder.append("  ");
+            }
+            builder.append("orderingScheme=")
+                    .append(sortNode.getOrderingScheme())
+                    .append('\n');
+        }
+        else if (node instanceof TopNNode) {
+            TopNNode topNNode = (TopNNode) node;
+            for (int i = 0; i < depth + 1; i++) {
+                builder.append("  ");
+            }
+            builder.append("count=")
+                    .append(topNNode.getCount())
+                    .append(" orderingScheme=")
+                    .append(topNNode.getOrderingScheme())
+                    .append('\n');
+        }
+        else if (node instanceof AggregationNode) {
+            AggregationNode aggregationNode = (AggregationNode) node;
+            for (int i = 0; i < depth + 1; i++) {
+                builder.append("  ");
+            }
+            builder.append("groupingSets=")
+                    .append(aggregationNode.getGroupingSets())
+                    .append('\n');
+            for (Map.Entry<VariableReferenceExpression, AggregationNode.Aggregation> entry : aggregationNode.getAggregations().entrySet()) {
+                for (int i = 0; i < depth + 2; i++) {
+                    builder.append("  ");
+                }
+                builder.append(entry.getKey())
+                        .append(" := ")
+                        .append(entry.getValue().getCall())
+                        .append(" | exprType=")
+                        .append(entry.getValue().getCall() == null ? "null" : entry.getValue().getCall().getClass().getSimpleName())
+                        .append('\n');
+            }
+        }
+        else if (node instanceof OutputNode) {
+            OutputNode outputNode = (OutputNode) node;
+            for (int i = 0; i < depth + 1; i++) {
+                builder.append("  ");
+            }
+            builder.append("columns=")
+                    .append(outputNode.getColumnNames())
+                    .append('\n');
+        }
+        for (PlanNode source : node.getSources()) {
+            formatPlanNodeDetails(source, builder, depth + 1);
+        }
+    }
+
+    private String formatJsonSubtree(JsonNode node)
+    {
+        if (node == null || node.isMissingNode()) {
+            return "<missing>";
+        }
+        try {
+            return objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(node);
+        }
+        catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            return String.valueOf(node);
+        }
+        catch (RuntimeException e) {
+            return String.valueOf(node);
         }
     }
 
@@ -2433,6 +2616,16 @@ public class OpengaussPlanAdapter
         }
         String stripped = name.replace("\"", "").trim();
         return stripped.contains(".") ? stripped.substring(stripped.lastIndexOf('.') + 1) : stripped;
+    }
+
+    private static String firstNonNullStatic(String... values)
+    {
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return null;
     }
 
     private String firstNonNull(String... values)
