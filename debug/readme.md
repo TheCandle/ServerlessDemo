@@ -1,0 +1,3 @@
+
+opengauss_debug_output_enabled  决定是否截中间节点，打印输出
+opengauss_debug_output_plan_node_id  目标 PlanNodeId

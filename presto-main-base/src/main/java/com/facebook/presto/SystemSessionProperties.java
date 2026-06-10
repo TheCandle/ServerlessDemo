@@ -302,6 +302,8 @@ public final class SystemSessionProperties
     public static final String KEY_BASED_SAMPLING_ENABLED = "key_based_sampling_enabled";
     public static final String KEY_BASED_SAMPLING_PERCENTAGE = "key_based_sampling_percentage";
     public static final String KEY_BASED_SAMPLING_FUNCTION = "key_based_sampling_function";
+    public static final String OPENGAUSS_DEBUG_OUTPUT_ENABLED = "opengauss_debug_output_enabled";
+    public static final String OPENGAUSS_DEBUG_OUTPUT_PLAN_NODE_ID = "opengauss_debug_output_plan_node_id";
     public static final String QUICK_DISTINCT_LIMIT_ENABLED = "quick_distinct_limit_enabled";
     public static final String OPTIMIZE_CONDITIONAL_AGGREGATION_ENABLED = "optimize_conditional_aggregation_enabled";
     public static final String ANALYZER_TYPE = "analyzer_type";
@@ -1551,6 +1553,16 @@ public final class SystemSessionProperties
                         "Sampling function for key based sampling",
                         "key_sampling_percent",
                         false),
+                booleanProperty(
+                        OPENGAUSS_DEBUG_OUTPUT_ENABLED,
+                        "Debug only: enable wrapping an intermediate plan node as the output.",
+                        false,
+                        false),
+                stringProperty(
+                        OPENGAUSS_DEBUG_OUTPUT_PLAN_NODE_ID,
+                        "Debug only: plan node id to wrap as output when opengauss debug output is enabled.",
+                        "",
+                        false),
                 integerProperty(
                         MAX_STAGE_COUNT_FOR_EAGER_SCHEDULING,
                         "Maximum stage count to use eager scheduling when using the adaptive scheduling policy",
@@ -2168,6 +2180,17 @@ public final class SystemSessionProperties
     public static String getKeyBasedSamplingFunction(Session session)
     {
         return session.getSystemProperty(KEY_BASED_SAMPLING_FUNCTION, String.class);
+    }
+
+    public static boolean getOpengaussDebugOutputEnabled(Session session)
+    {
+        return session.getSystemProperty(OPENGAUSS_DEBUG_OUTPUT_ENABLED, Boolean.class);
+    }
+
+    public static String getOpengaussDebugOutputPlanNodeId(Session session)
+    {
+        String value = session.getSystemProperty(OPENGAUSS_DEBUG_OUTPUT_PLAN_NODE_ID, String.class);
+        return value == null ? "" : value;
     }
 
     public List<PropertyMetadata<?>> getSessionProperties()

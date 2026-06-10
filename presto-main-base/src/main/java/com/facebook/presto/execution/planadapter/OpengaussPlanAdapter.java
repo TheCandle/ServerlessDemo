@@ -1,6 +1,8 @@
 package com.facebook.presto.execution.planadapter;
 
 import com.facebook.presto.Session;
+import static com.facebook.presto.SystemSessionProperties.getOpengaussDebugOutputEnabled;
+import static com.facebook.presto.SystemSessionProperties.getOpengaussDebugOutputPlanNodeId;
 import com.facebook.presto.common.QualifiedObjectName;
 import com.facebook.presto.common.block.SortOrder;
 import com.facebook.presto.common.function.OperatorType;
@@ -87,13 +89,6 @@ import java.util.Optional;
 
 public class OpengaussPlanAdapter
 {
-//    private static final boolean DEBUG_OUTPUT_ENABLED = Boolean.parseBoolean(firstNonNullStatic(System.getProperty("opengauss.plan.debug.output"), System.getenv("OPENGAUSS_PLAN_DEBUG_OUTPUT"), "false"));
-//    private static final String DEBUG_OUTPUT_TARGET_PLAN_ID = firstNonNullStatic(System.getProperty("opengauss.plan.debug.planid"), System.getenv("OPENGAUSS_PLAN_DEBUG_PLANID"));
-    private static final boolean DEBUG_OUTPUT_ENABLED = false;
-    private static final String DEBUG_OUTPUT_TARGET_PLAN_ID = "3";
-
-
-
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final OpengaussExpressionTranslator expressionTranslator = new OpengaussExpressionTranslator();
     private final SqlParser sqlParser = new SqlParser();
@@ -981,19 +976,24 @@ public class OpengaussPlanAdapter
         return wrapWithOutputNode(planNode, node, context);
     }
 
-    private boolean shouldInsertDebugOutput(JsonNode planRoot)
+    private boolean shouldInsertDebugOutput(AdapterContext context)
     {
-        return DEBUG_OUTPUT_ENABLED && DEBUG_OUTPUT_TARGET_PLAN_ID != null && !DEBUG_OUTPUT_TARGET_PLAN_ID.isBlank();
+        return context != null
+                && context.getSession() != null
+                && getOpengaussDebugOutputEnabled(context.getSession())
+                && !getOpengaussDebugOutputPlanNodeId(context.getSession()).isBlank();
     }
 
     private PlanNode insertDebugOutputAtPlanId(PlanNode planNode, AdapterContext context)
     {
-        if (!DEBUG_OUTPUT_ENABLED || DEBUG_OUTPUT_TARGET_PLAN_ID == null || DEBUG_OUTPUT_TARGET_PLAN_ID.isBlank() || planNode == null) {
+        if (planNode == null || !shouldInsertDebugOutput(context)) {
             return planNode;
         }
-        PlanNode target = findDebugTargetNode(planNode);
+
+        String debugPlanId = getOpengaussDebugOutputPlanNodeId(context.getSession()).trim();
+        PlanNode target = findDebugTargetNode(planNode, debugPlanId);
         if (target == null) {
-            System.out.println("[OpengaussPlanAdapter] debug OutputNode target not found in converted plan tree planId=" + DEBUG_OUTPUT_TARGET_PLAN_ID
+            System.out.println("[OpengaussPlanAdapter] debug OutputNode target not found in converted plan tree planId=" + debugPlanId
                     + " root=" + planNode.getId());
             return planNode;
         }
@@ -1007,21 +1007,21 @@ public class OpengaussPlanAdapter
         System.out.println("[OpengaussPlanAdapter] debug output node created for converted planId=" + target.getId()
                 + " outputs=" + outputVariables
                 + " columns=" + columnNames);
-        System.out.println("[OpengaussPlanAdapter] inserted debug OutputNode at converted planId=" + DEBUG_OUTPUT_TARGET_PLAN_ID
+        System.out.println("[OpengaussPlanAdapter] inserted debug OutputNode at converted planId=" + debugPlanId
                 + " tree=\n" + formatPlanTree(debugOutput));
         return debugOutput;
     }
 
-    private PlanNode findDebugTargetNode(PlanNode planNode)
+    private PlanNode findDebugTargetNode(PlanNode planNode, String targetPlanId)
     {
-        if (planNode == null) {
+        if (planNode == null || targetPlanId == null) {
             return null;
         }
-        if (matchesDebugPlanId(planNode)) {
+        if (matchesDebugPlanId(planNode, targetPlanId)) {
             return planNode;
         }
         for (PlanNode source : planNode.getSources()) {
-            PlanNode found = findDebugTargetNode(source);
+            PlanNode found = findDebugTargetNode(source, targetPlanId);
             if (found != null) {
                 return found;
             }
@@ -1029,9 +1029,9 @@ public class OpengaussPlanAdapter
         return null;
     }
 
-    private boolean matchesDebugPlanId(PlanNode planNode)
+    private boolean matchesDebugPlanId(PlanNode planNode, String targetPlanId)
     {
-        return planNode != null && planNode.getId() != null && DEBUG_OUTPUT_TARGET_PLAN_ID.equalsIgnoreCase(planNode.getId().toString());
+        return planNode != null && planNode.getId() != null && targetPlanId.equalsIgnoreCase(planNode.getId().toString());
     }
 
     private PlanNode rewritePlanNodeSources(PlanNode planNode, List<PlanNode> newSources, AdapterContext context)
