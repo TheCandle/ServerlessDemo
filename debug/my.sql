@@ -1,1 +1,1 @@
-select * from tpchstandard.tiny.lineitem;
+select 1;

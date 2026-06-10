@@ -1915,7 +1915,7 @@ public class OpengaussPlanAdapter
             return null;
         }
         String normalized = text.trim();
-        while (normalized.startsWith("(") && normalized.endsWith(")") && matchingParens(normalized)) {
+        while (canStripWrappingParens(normalized)) {
             normalized = normalized.substring(1, normalized.length() - 1).trim();
         }
         String afterParenStrip = normalized;
@@ -2413,7 +2413,7 @@ public class OpengaussPlanAdapter
         if (normalized == null || normalized.isEmpty()) {
             return null;
         }
-        while (normalized.startsWith("(") && normalized.endsWith(")") && matchingParens(normalized)) {
+        while (canStripWrappingParens(normalized)) {
             normalized = normalized.substring(1, normalized.length() - 1).trim();
         }
         if (normalized.isEmpty()) {
@@ -3276,12 +3276,8 @@ public class OpengaussPlanAdapter
             return null;
         }
         String inside = normalized.substring(open + 1, close).trim();
-        while (inside.startsWith("(") && inside.endsWith(")") && inside.length() > 1) {
-            String stripped = inside.substring(1, inside.length() - 1).trim();
-            if (stripped.equals(inside)) {
-                break;
-            }
-            inside = stripped;
+        while (canStripWrappingParens(inside)) {
+            inside = inside.substring(1, inside.length() - 1).trim();
         }
         if ("count".equalsIgnoreCase(functionName) && ("*".equals(inside) || "1".equals(inside))) {
             return new AggregationCallSpec("count", inferAggregationSemanticNames(node, source), List.of(new ConstantExpression(1L, BigintType.BIGINT)), BigintType.BIGINT);

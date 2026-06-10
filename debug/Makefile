@@ -12,11 +12,16 @@ run-query:
           --catalog tpchstandard \
           --schema tiny \
           --output-format CSV \
+	  --session opengauss_debug_output_enabled=true \
+          --session opengauss_debug_output_plan_node_id=3 \
 	  -f my.sql > my.csv 
 	
 	sort true.csv > output1.sorted
 	sort my.csv > output2.sorted
 	
 	diff output1.sorted output2.sorted
+
+clean:
+	rm *.sorted 
 
 
