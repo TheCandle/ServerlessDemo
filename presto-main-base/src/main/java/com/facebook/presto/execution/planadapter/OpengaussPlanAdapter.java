@@ -657,12 +657,15 @@ public class OpengaussPlanAdapter
                 + " parsedOutputNames=" + outputNames);
 
         Map<String, VariableReferenceExpression> sourceVariables = buildVariablesByOutput(source);
+        Map<String, VariableReferenceExpression> recursiveVariables = buildVariablesByPlanTree(source);
+        Map<String, VariableReferenceExpression> expressionVariables = new LinkedHashMap<>(sourceVariables);
+        recursiveVariables.forEach(expressionVariables::putIfAbsent);
         List<VariableReferenceExpression> preProjectOutputs = new ArrayList<>();
         Map<VariableReferenceExpression, RowExpression> preProjectAssignments = new LinkedHashMap<>();
         List<String> aggOutputNames = new ArrayList<>();
         List<AggregationCallSpec> aggSpecs = new ArrayList<>();
         List<VariableReferenceExpression> aggDependencyOutputs = new ArrayList<>();
-        Map<String, VariableReferenceExpression> dependencyLookup = new LinkedHashMap<>(sourceVariables);
+        Map<String, VariableReferenceExpression> dependencyLookup = new LinkedHashMap<>(expressionVariables);
 
         for (String outputName : outputNames) {
             String normalizedOutput = canonicalizeExpressionText(outputName);
@@ -2525,7 +2528,8 @@ public class OpengaussPlanAdapter
         if (variable != null) {
             return variable;
         }
-        return varcharConstant(stripQuotes(normalized));
+        System.out.println("[OpengaussPlanAdapter] parseValue unresolved normalized=" + normalized + " variables=" + variables.keySet());
+        return null;
     }
 
     private Map<String, VariableReferenceExpression> buildVariablesByOutput(PlanNode node)
@@ -2537,6 +2541,28 @@ public class OpengaussPlanAdapter
             result.put(simpleName(name).toLowerCase(Locale.ENGLISH), variable);
         }
         return result;
+    }
+
+    private Map<String, VariableReferenceExpression> buildVariablesByPlanTree(PlanNode node)
+    {
+        Map<String, VariableReferenceExpression> result = new LinkedHashMap<>();
+        collectVariablesByPlanTree(node, result);
+        return result;
+    }
+
+    private void collectVariablesByPlanTree(PlanNode node, Map<String, VariableReferenceExpression> result)
+    {
+        if (node == null || result == null) {
+            return;
+        }
+        for (VariableReferenceExpression variable : node.getOutputVariables()) {
+            String name = variable.getName().toLowerCase(Locale.ENGLISH);
+            result.putIfAbsent(name, variable);
+            result.putIfAbsent(simpleName(name).toLowerCase(Locale.ENGLISH), variable);
+        }
+        for (PlanNode source : node.getSources()) {
+            collectVariablesByPlanTree(source, result);
+        }
     }
 
     private VariableReferenceExpression lookupVariable(String token, Map<String, VariableReferenceExpression> variables)
@@ -2553,6 +2579,71 @@ public class OpengaussPlanAdapter
         }
         for (Map.Entry<String, VariableReferenceExpression> entry : variables.entrySet()) {
             if (normalizedToken.contains(entry.getKey()) || entry.getKey().contains(simple)) {
+                return entry.getValue();
+            }
+        }
+        return null;
+    }
+
+    private List<String> extractExpressionTokens(String expression)
+    {
+        if (expression == null || expression.isBlank()) {
+            return Collections.emptyList();
+        }
+        String normalized = canonicalizeExpressionText(expression).toLowerCase(Locale.ENGLISH);
+        normalized = normalized.replace("(", " ").replace(")", " ").replace(",", " ").replace("+", " ").replace("-", " ").replace("*", " ").replace("/", " ").replace("::", " ");
+        String[] parts = normalized.split("[^a-z0-9_.$]+");
+        List<String> tokens = new ArrayList<>();
+        for (String part : parts) {
+            if (part == null || part.isBlank()) {
+                continue;
+            }
+            String token = simpleName(part).toLowerCase(Locale.ENGLISH);
+            if (token.isBlank()) {
+                continue;
+            }
+            if (!tokens.contains(token)) {
+                tokens.add(token);
+            }
+        }
+        return tokens;
+    }
+
+    private VariableReferenceExpression lookupVariableByExpressionShape(String expression, Map<String, VariableReferenceExpression> variables)
+    {
+        if (expression == null || variables == null || variables.isEmpty()) {
+            return null;
+        }
+        String normalized = stripUnmatchedOuterParens(canonicalizeExpressionText(expression).trim());
+        List<String> tokens = extractExpressionTokens(normalized);
+        if (tokens.isEmpty()) {
+            return null;
+        }
+        for (Map.Entry<String, VariableReferenceExpression> entry : variables.entrySet()) {
+            String key = entry.getKey();
+            if (key == null || key.isBlank()) {
+                continue;
+            }
+            String normalizedKey = key.toLowerCase(Locale.ENGLISH).replaceAll("[^a-z0-9_]+", "");
+            boolean allMatched = true;
+            for (String token : tokens) {
+                if (token.equals("sum") || token.equals("avg") || token.equals("count") || token.equals("min") || token.equals("max") || token.equals("pg_catalog") || token.equals("numeric") || token.equals("double") || token.equals("bigint") || token.equals("decimal") || token.equals("real")) {
+                    continue;
+                }
+                String normalizedToken = token.toLowerCase(Locale.ENGLISH).replaceAll("[^a-z0-9_]+", "");
+                if (normalizedToken.isEmpty()) {
+                    continue;
+                }
+                if (!normalizedKey.contains(normalizedToken)) {
+                    allMatched = false;
+                    break;
+                }
+            }
+            if (allMatched) {
+                return entry.getValue();
+            }
+            String sourceName = entry.getValue() == null ? null : entry.getValue().getName();
+            if (sourceName != null && normalized.equalsIgnoreCase(sourceName)) {
                 return entry.getValue();
             }
         }
@@ -3181,11 +3272,32 @@ public class OpengaussPlanAdapter
         if ("count".equalsIgnoreCase(functionName)) {
             return new ConstantExpression(1L, BigintType.BIGINT);
         }
-        RowExpression candidate = firstNumericAggregationInput(buildVariablesByOutput(source));
+
+        Map<String, VariableReferenceExpression> variables = buildVariablesByOutput(source);
+        if ("avg".equalsIgnoreCase(functionName)) {
+            VariableReferenceExpression avgVariable = selectBestMatchingVariable(variables, null, "avg");
+            if (avgVariable != null) {
+                return avgVariable;
+            }
+        }
+
+        RowExpression candidate = firstNumericAggregationInput(variables);
         if (candidate != null) {
+            if ("avg".equalsIgnoreCase(functionName) && candidate instanceof VariableReferenceExpression) {
+                String name = ((VariableReferenceExpression) candidate).getName().toLowerCase(Locale.ENGLISH);
+                if (name.contains("sum") && !name.contains("avg")) {
+                    VariableReferenceExpression avgVariable = selectBestMatchingVariable(variables, null, "avg");
+                    if (avgVariable != null) {
+                        return avgVariable;
+                    }
+                }
+            }
             return candidate;
         }
         for (VariableReferenceExpression variable : source.getOutputVariables()) {
+            if ("avg".equalsIgnoreCase(functionName) && variable.getName().toLowerCase(Locale.ENGLISH).contains("avg")) {
+                return variable;
+            }
             if (!BooleanType.BOOLEAN.equals(variable.getType()) && !VarcharType.VARCHAR.equals(variable.getType())) {
                 return variable;
             }
@@ -3194,6 +3306,53 @@ public class OpengaussPlanAdapter
             return source.getOutputVariables().get(0);
         }
         return new ConstantExpression(0.0, DoubleType.DOUBLE);
+    }
+
+    private VariableReferenceExpression selectBestMatchingVariable(Map<String, VariableReferenceExpression> variables, String expression, String keyword)
+    {
+        if (variables == null || variables.isEmpty() || keyword == null || keyword.isBlank()) {
+            return null;
+        }
+        String normalizedExpression = expression == null ? "" : canonicalizeExpressionText(expression).toLowerCase(Locale.ENGLISH).replace(" ", "");
+        String lowerKeyword = keyword.toLowerCase(Locale.ENGLISH);
+        List<String> expressionTokens = extractExpressionTokens(expression);
+
+        VariableReferenceExpression best = null;
+        int bestScore = -1;
+        for (Map.Entry<String, VariableReferenceExpression> entry : variables.entrySet()) {
+            VariableReferenceExpression variable = entry.getValue();
+            if (variable == null || variable.getName() == null) {
+                continue;
+            }
+            String variableName = variable.getName().toLowerCase(Locale.ENGLISH);
+            int score = 0;
+            if (variableName.contains(lowerKeyword)) {
+                score += 10;
+            }
+            if (normalizedExpression.contains(variableName.replace("_raw", ""))) {
+                score += 8;
+            }
+            for (String token : expressionTokens) {
+                if (token == null || token.isBlank()) {
+                    continue;
+                }
+                String lowerToken = token.toLowerCase(Locale.ENGLISH);
+                if (variableName.contains(lowerToken) || lowerToken.contains(variableName)) {
+                    score += 4;
+                }
+            }
+            if (variableName.startsWith("avg") && normalizedExpression.contains("avg(")) {
+                score += 5;
+            }
+            if (variableName.startsWith("sum") && normalizedExpression.contains("sum(")) {
+                score += 3;
+            }
+            if (score > bestScore) {
+                bestScore = score;
+                best = variable;
+            }
+        }
+        return best;
     }
 
 
@@ -3290,6 +3449,27 @@ public class OpengaussPlanAdapter
             }
         }
         RowExpression argument = parseAggregationArgumentExpression(inside, variables);
+        if ("avg".equalsIgnoreCase(functionName)) {
+            VariableReferenceExpression avgPreferred = selectBestMatchingVariable(variables, inside, "avg");
+            if (avgPreferred != null) {
+                if (argument == null) {
+                    argument = avgPreferred;
+                }
+                else if (argument instanceof VariableReferenceExpression) {
+                    String argName = ((VariableReferenceExpression) argument).getName().toLowerCase(Locale.ENGLISH);
+                    String preferredName = avgPreferred.getName().toLowerCase(Locale.ENGLISH);
+                    List<String> expressionTokens = extractExpressionTokens(inside);
+                    boolean matchesPreferred = expressionTokens.stream().anyMatch(token -> preferredName.contains(token.toLowerCase(Locale.ENGLISH)) || token.toLowerCase(Locale.ENGLISH).contains(preferredName));
+                    boolean matchesArgument = expressionTokens.stream().anyMatch(token -> argName.contains(token.toLowerCase(Locale.ENGLISH)) || token.toLowerCase(Locale.ENGLISH).contains(argName));
+                    if ((!matchesArgument && matchesPreferred) || argName.contains("sum") || !argName.contains("avg")) {
+                        argument = avgPreferred;
+                    }
+                }
+                else if (argument instanceof ConstantExpression) {
+                    argument = avgPreferred;
+                }
+            }
+        }
         System.out.println("[OpengaussPlanAdapter] parseAggregationFragment preNormalize functionName=" + functionName
                 + " inside=" + inside
                 + " argument=" + argument
@@ -3407,6 +3587,11 @@ public class OpengaussPlanAdapter
             if (direct != null) {
                 return direct;
             }
+        }
+
+        VariableReferenceExpression shaped = lookupVariableByExpressionShape(normalized, variables);
+        if (shaped != null) {
+            return shaped;
         }
 
         RowExpression parsed = parseExpression(normalized, variables, false);
