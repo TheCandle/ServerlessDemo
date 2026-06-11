@@ -14,6 +14,7 @@ import com.facebook.presto.common.type.DecimalType;
 import com.facebook.presto.common.type.DoubleType;
 import com.facebook.presto.common.type.RealType;
 import com.facebook.presto.common.type.VarcharType;
+import com.facebook.presto.execution.QueryStateMachine;
 import com.facebook.presto.execution.TpchSchemaRegistry;
 import com.facebook.presto.metadata.BuiltInFunctionHandle;
 import com.facebook.presto.metadata.Metadata;
@@ -24,12 +25,13 @@ import com.facebook.presto.spi.function.FunctionKind;
 import com.facebook.presto.spi.function.Signature;
 import com.facebook.presto.common.type.Type;
 import com.facebook.presto.common.type.TypeSignature;
+import com.facebook.presto.sql.ExpressionUtils;
 import com.facebook.presto.sql.tree.NodeRef;
 import com.facebook.presto.sql.analyzer.TypeSignatureProvider;
 import com.facebook.presto.sql.parser.SqlParser;
 import com.facebook.presto.sql.planner.TypeProvider;
-//import com.facebook.presto.execution.RowExpressionTranslator;
-import com.facebook.presto.sql.relational.SqlToRowExpressionTranslator;
+import com.facebook.presto.execution.RowExpressionTranslator;
+//import com.facebook.presto.sql.relational.SqlToRowExpressionTranslator;
 import com.facebook.presto.sql.tree.BooleanLiteral;
 import com.facebook.presto.sql.tree.Cast;
 import com.facebook.presto.sql.tree.ComparisonExpression;
@@ -89,21 +91,33 @@ import java.util.Optional;
 
 public class OpengaussPlanAdapter
 {
+    Metadata metadata;
+    QueryStateMachine stateMachine;
+    private  RowExpressionTranslator sqlToRowExpressionTranslator;
+    public OpengaussPlanAdapter(Metadata metadata, QueryStateMachine stateMachine) {
+        this.metadata = metadata;
+        this.stateMachine = stateMachine;
+        this.sqlToRowExpressionTranslator = new RowExpressionTranslator(metadata, getSession());
+    }
+
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final OpengaussExpressionTranslator expressionTranslator = new OpengaussExpressionTranslator();
     private final SqlParser sqlParser = new SqlParser();
-    // private  RowExpressionTranslator sqlToRowExpressionTranslator = new RowExpressionTranslator(metadata, getSession());
 
+    public Session getSession()
+    {
+        return stateMachine.getSession();
+    }
 
-    // public static Expression expression(String sql) {
-    //     return ExpressionUtils.rewriteIdentifiersToSymbolReferences(new SqlParser().createExpression(sql));
-    // }
+     public static Expression expression(String sql) {
+         return ExpressionUtils.rewriteIdentifiersToSymbolReferences(new SqlParser().createExpression(sql));
+     }
 
-    // public RowExpression getRowExpression(String expression) {
-    //     TypeProvider typeProvider = TpchSchemaRegistry.getProvider();
-    //     RowExpression rowExpression = sqlToRowExpressionTranslator.translateAndOptimize(expression(expression), typeProvider);
-    //     return rowExpression;
-    // }
+     public RowExpression getRowExpression(String expression) {
+         TypeProvider typeProvider = TpchSchemaRegistry.getProvider();
+         RowExpression rowExpression = sqlToRowExpressionTranslator.translateAndOptimize(expression(expression), typeProvider);
+         return rowExpression;
+     }
 
     public PlanNode adapt(String queryId, AdapterContext context)
     {
@@ -1600,6 +1614,7 @@ public class OpengaussPlanAdapter
 ////                return getRowExpression(normalized);
 //            }
             return parseExpression(normalized, variables, projectMode);
+//              return getRowExpression(normalized);
         }
         catch (RuntimeException e) {
             RowExpression parsed = parseExpression(expression, variables, projectMode);
@@ -1681,6 +1696,19 @@ public class OpengaussPlanAdapter
             return null;
         }
         String normalized = canonicalizeExpressionText(predicate);
+        int anyIndex = normalized.toUpperCase(Locale.ENGLISH).indexOf("= ANY");
+        if (anyIndex > 0) {
+            String leftText = stripUnmatchedOuterParens(normalized.substring(0, anyIndex).trim());
+            String rightText = normalized.substring(anyIndex + 5).trim();
+            RowExpression left = parseValue(leftText, variables);
+            List<RowExpression> rightValues = parseAnyArrayValues(rightText, variables, left == null ? null : left.getType());
+            if (left != null && rightValues != null && !rightValues.isEmpty()) {
+                List<RowExpression> arguments = new ArrayList<>();
+                arguments.add(left);
+                arguments.addAll(rightValues);
+                return new SpecialFormExpression(SpecialFormExpression.Form.IN, BooleanType.BOOLEAN, arguments);
+            }
+        }
         for (String op : new String[] {" >= ", " <= ", " <> ", " != ", " = ", " > ", " < "}) {
             int idx = findTopLevelDelimiter(normalized, op);
             if (idx > 0) {
@@ -1803,10 +1831,10 @@ public class OpengaussPlanAdapter
             }
         }
 
-        if (normalized.contains(" IN ")) {
-            RowExpression inExpression = parseInExpression(normalized, variables);
-            if (inExpression != null) {
-                return inExpression;
+        if (normalized.contains(" IN ") || normalized.toUpperCase(Locale.ENGLISH).contains("= ANY")) {
+            RowExpression booleanExpression = parseBooleanPredicate(normalized, variables);
+            if (booleanExpression != null) {
+                return booleanExpression;
             }
         }
 
@@ -1980,6 +2008,101 @@ public class OpengaussPlanAdapter
             }
         }
         return new SpecialFormExpression(SpecialFormExpression.Form.IN, BooleanType.BOOLEAN, arguments);
+    }
+
+    private List<RowExpression> parseAnyArrayValues(String text, Map<String, VariableReferenceExpression> variables, Type elementType)
+    {
+        if (text == null || text.isBlank()) {
+            return null;
+        }
+        String normalized = canonicalizeExpressionText(text).trim();
+        String rightPart = normalized;
+        String upper = normalized.toUpperCase(Locale.ENGLISH);
+        int anyIndex = upper.indexOf("ANY");
+        if (anyIndex >= 0) {
+            rightPart = normalized.substring(anyIndex + 3).trim();
+            if (rightPart.startsWith("(")) {
+                rightPart = rightPart.substring(1).trim();
+            }
+            if (rightPart.endsWith(")")) {
+                rightPart = rightPart.substring(0, rightPart.length() - 1).trim();
+            }
+        }
+        int braceOpen = rightPart.indexOf('{');
+        int braceClose = rightPart.lastIndexOf('}');
+        String inside;
+        if (braceOpen >= 0 && braceClose > braceOpen) {
+            inside = rightPart.substring(braceOpen + 1, braceClose).trim();
+        }
+        else {
+            int open = rightPart.indexOf('[');
+            int close = rightPart.lastIndexOf(']');
+            if (open < 0 || close <= open) {
+                open = rightPart.indexOf('(');
+                close = rightPart.lastIndexOf(')');
+            }
+            if (open < 0 || close <= open) {
+                inside = rightPart.trim();
+            }
+            else {
+                inside = rightPart.substring(open + 1, close).trim();
+            }
+            if (inside.startsWith("{") && inside.endsWith("}")) {
+                inside = inside.substring(1, inside.length() - 1).trim();
+            }
+        }
+        List<RowExpression> values = new ArrayList<>();
+        for (String value : inside.split(",")) {
+            String token = stripQuotes(value.trim());
+            if (!token.isEmpty()) {
+                RowExpression parsed = parseValue(token, variables);
+                if (parsed == null) {
+                    parsed = parseAnyArrayLiteral(token, elementType);
+                }
+                if (parsed == null) {
+                    parsed = varcharConstant(token);
+                }
+                values.add(parsed);
+            }
+        }
+        return values;
+    }
+
+    private RowExpression parseAnyArrayLiteral(String token, Type elementType)
+    {
+        if (token == null || token.isBlank()) {
+            return null;
+        }
+        String normalized = stripQuotes(token.trim());
+        if (normalized == null || normalized.isBlank()) {
+            return null;
+        }
+        if (elementType != null) {
+            if (isDateLikeType(elementType) && normalized.matches("\\d{4}-\\d{2}-\\d{2}(?:[ T].*)?")) {
+                return dateConstant(normalized);
+            }
+            if (isNumericType(elementType) && normalized.matches("-?(?:\\d+\\.\\d+|\\d+|\\.\\d+)") ) {
+                String decimalText = normalized.startsWith(".") ? "0" + normalized : normalized;
+                if (decimalText.startsWith("-.")) {
+                    decimalText = "-0" + decimalText.substring(1);
+                }
+                return new ConstantExpression(Double.valueOf(decimalText), DoubleType.DOUBLE);
+            }
+            if (VarcharType.VARCHAR.equals(elementType) || elementType instanceof VarcharType || isTextType(elementType)) {
+                return varcharConstant(normalized);
+            }
+        }
+        if (normalized.matches("-?\\d+")) {
+            return new ConstantExpression(Long.valueOf(normalized), BigintType.BIGINT);
+        }
+        if (normalized.matches("-?(?:\\d+\\.\\d+|\\d+|\\.\\d+)") ) {
+            String decimalText = normalized.startsWith(".") ? "0" + normalized : normalized;
+            if (decimalText.startsWith("-.")) {
+                decimalText = "-0" + decimalText.substring(1);
+            }
+            return new ConstantExpression(Double.valueOf(decimalText), DoubleType.DOUBLE);
+        }
+        return varcharConstant(normalized);
     }
 
     private RowExpression buildComparison(String operator, RowExpression left, RowExpression right)
@@ -2459,6 +2582,10 @@ public class OpengaussPlanAdapter
             RowExpression result = varcharConstant(normalized);
             System.out.println("[OpengaussPlanAdapter] parseValue param normalized=" + normalized + " -> " + result + " type=" + result.getType());
             return result;
+        }
+        if (normalized.toUpperCase(Locale.ENGLISH).startsWith("ANY ")) {
+            System.out.println("[OpengaussPlanAdapter] parseValue any normalized=" + normalized + " -> unsupported in scalar context");
+            return null;
         }
         if (normalized.toLowerCase(Locale.ENGLISH).startsWith("substring")) {
             RowExpression result = parseSubstringCall(normalized, variables);
@@ -4125,9 +4252,6 @@ public class OpengaussPlanAdapter
                 inDoubleQuote = !inDoubleQuote;
                 continue;
             }
-            if (inSingleQuote || inDoubleQuote || inSquareBracket) {
-                continue;
-            }
             if (ch == '[') {
                 inSquareBracket = true;
                 continue;
@@ -4136,6 +4260,10 @@ public class OpengaussPlanAdapter
                 inSquareBracket = false;
                 continue;
             }
+            if (inSingleQuote || inDoubleQuote || inSquareBracket) {
+                continue;
+            }
+
             if (ch == '(') {
                 depth++;
             }
