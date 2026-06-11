@@ -873,8 +873,15 @@ public class OpengaussPlanAdapter
             case "count":
                 return BigintType.BIGINT;
             case "avg":
-            case "sum":
                 return DoubleType.DOUBLE;
+            case "sum":
+                if (inputType == null) {
+                    return DoubleType.DOUBLE;
+                }
+                if (isFloatingPointType(inputType)) {
+                    return DoubleType.DOUBLE;
+                }
+                return BigintType.BIGINT;
             case "min":
             case "max":
                 return inputType == null || VarcharType.VARCHAR.equals(inputType) ? DoubleType.DOUBLE : inputType;
@@ -1696,6 +1703,14 @@ public class OpengaussPlanAdapter
             return null;
         }
         String normalized = canonicalizeExpressionText(predicate);
+        normalized = stripUnmatchedOuterParens(normalized);
+        if (normalized.startsWith("NOT ") && normalized.length() > 4) {
+            RowExpression child = parseBooleanPredicate(normalized.substring(4).trim(), variables);
+            if (child != null) {
+                return new CallExpression("not", builtInUnaryHandle("not", BooleanType.BOOLEAN, child.getType()), BooleanType.BOOLEAN, List.of(child));
+            }
+        }
+
         int anyIndex = normalized.toUpperCase(Locale.ENGLISH).indexOf("= ANY");
         if (anyIndex > 0) {
             String leftText = stripUnmatchedOuterParens(normalized.substring(0, anyIndex).trim());
@@ -1724,12 +1739,6 @@ public class OpengaussPlanAdapter
                 }
             }
         }
-        if (normalized.regionMatches(true, 0, "NOT ", 0, 4) && normalized.length() > 4) {
-            RowExpression child = parseBooleanPredicate(normalized.substring(4).trim(), variables);
-            if (child != null) {
-                return new CallExpression("not", builtInUnaryHandle("not", BooleanType.BOOLEAN, child.getType()), BooleanType.BOOLEAN, List.of(child));
-            }
-        }
         return null;
     }
 
@@ -1749,6 +1758,7 @@ public class OpengaussPlanAdapter
 
     private RowExpression parseExpression(String expression, Map<String, VariableReferenceExpression> variables, boolean projectMode)
     {
+        // return getRowExpression(expression);
         if (expression == null || expression.isBlank()) {
             return null;
         }
@@ -1852,8 +1862,11 @@ public class OpengaussPlanAdapter
             }
         }
 
-        for (String op : new String[] {" >= ", " <= ", " <> ", " != ", " = ", " > ", " < "}) {
+        for (String op : new String[] {" >= ", " <= ", " <> ", "!=", " = ", " > ", " < "}) {
             int idx = findTopLevelDelimiter(normalized, op);
+            if (idx < 0 && ("<>".equals(op) || "!=".equals(op))) {
+                idx = normalized.indexOf(op);
+            }
             if (idx > 0) {
                 String leftText = stripUnmatchedOuterParens(normalized.substring(0, idx).trim());
                 String rightText = stripUnmatchedOuterParens(normalized.substring(idx + op.length()).trim());
@@ -2432,6 +2445,56 @@ public class OpengaussPlanAdapter
         }
     }
 
+    private RowExpression parseDateExpression(String text)
+    {
+        if (text == null || text.isBlank()) {
+            return null;
+        }
+        String normalized = text.trim();
+        String lower = normalized.toLowerCase(Locale.ENGLISH);
+        int plusIndex = lower.indexOf(" + interval ");
+        if (plusIndex < 0) {
+            if (lower.startsWith("date ")) {
+                return dateConstant(normalized.substring(4).trim());
+            }
+            return dateConstant(normalized);
+        }
+        String baseText = normalized.substring(0, plusIndex).trim();
+        String intervalText = normalized.substring(plusIndex + 12).trim();
+        ConstantExpression base = dateConstant(baseText);
+        if (base == null) {
+            return null;
+        }
+        Object value = base.getValue();
+        if (!(value instanceof Long)) {
+            return base;
+        }
+        try {
+            LocalDate baseDate = LocalDate.ofEpochDay((Long) value);
+            String intervalLower = intervalText.toLowerCase(Locale.ENGLISH);
+            if (intervalLower.startsWith("interval")) {
+                String[] parts = intervalText.split("\\s+");
+                if (parts.length >= 3) {
+                    String magnitudeText = stripQuotes(parts[1]);
+                    long magnitude = Long.parseLong(magnitudeText);
+                    String unit = parts[2].toLowerCase(Locale.ENGLISH);
+                    if (unit.startsWith("year")) {
+                        return new ConstantExpression(baseDate.plusYears(magnitude).toEpochDay(), DateType.DATE);
+                    }
+                    if (unit.startsWith("month")) {
+                        return new ConstantExpression(baseDate.plusMonths(magnitude).toEpochDay(), DateType.DATE);
+                    }
+                    if (unit.startsWith("day")) {
+                        return new ConstantExpression(baseDate.plusDays(magnitude).toEpochDay(), DateType.DATE);
+                    }
+                }
+            }
+        }
+        catch (RuntimeException ignored) {
+        }
+        return base;
+    }
+
     private Type widenNumericType(Type leftType, Type rightType)
     {
         if (leftType instanceof DoubleType || rightType instanceof DoubleType) {
@@ -2546,9 +2609,23 @@ public class OpengaussPlanAdapter
             return null;
         }
 
-        String unquoted = stripQuotes(normalized);
-        if (unquoted != null) {
-            normalized = unquoted.trim();
+        boolean wasQuoted = (normalized.startsWith("'") && normalized.endsWith("'"))
+                || (normalized.startsWith("\"") && normalized.endsWith("\""));
+        if (wasQuoted) {
+            normalized = stripQuotes(normalized).trim();
+            if (normalized.matches("\\d{4}-\\d{2}-\\d{2}(?:[ T].*)?")) {
+                RowExpression result = dateConstant(normalized);
+                System.out.println("[OpengaussPlanAdapter] parseValue quotedDate normalized=" + normalized + " -> " + result + " type=" + result.getType());
+                return result;
+            }
+            if (normalized.matches("\\d{4}-\\d{2}-\\d{2}[ T]\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?")) {
+                RowExpression result = dateConstant(normalized);
+                System.out.println("[OpengaussPlanAdapter] parseValue quotedTimestamp normalized=" + normalized + " -> " + result + " type=" + result.getType());
+                return result;
+            }
+            RowExpression result = varcharConstant(normalized);
+            System.out.println("[OpengaussPlanAdapter] parseValue string normalized=" + normalized + " -> " + result + " type=" + result.getType());
+            return result;
         }
 
         if (normalized.equalsIgnoreCase("true") || normalized.equalsIgnoreCase("false")) {
@@ -2571,6 +2648,11 @@ public class OpengaussPlanAdapter
                     ? new ConstantExpression(Double.valueOf(decimalText), DoubleType.DOUBLE)
                     : new ConstantExpression(Long.valueOf(decimalText), BigintType.BIGINT);
             System.out.println("[OpengaussPlanAdapter] parseValue decimal normalized=" + normalized + " -> " + result + " type=" + result.getType());
+            return result;
+        }
+        if (normalized.matches("(?i)date[ ]+'[^']+'(?:[ ]*\\+[ ]*interval[ ]+'\\d+'[ ]+(?:year|month|day|hour|minute|second)s?)?")) {
+            RowExpression result = parseDateExpression(normalized);
+            System.out.println("[OpengaussPlanAdapter] parseValue date normalized=" + normalized + " -> " + result + " type=" + (result == null ? "null" : result.getType()));
             return result;
         }
         if (normalized.matches("\\d{4}-\\d{2}-\\d{2}(?:[ T].*)?")) {
@@ -2644,16 +2726,16 @@ public class OpengaussPlanAdapter
             }
         }
 
+        VariableReferenceExpression variable = lookupVariable(normalized, variables);
+        if (variable != null) {
+            return variable;
+        }
         if (normalized.contains(".")) {
             String simple = normalized.substring(normalized.lastIndexOf('.') + 1);
-            VariableReferenceExpression variable = variables.get(simple.toLowerCase(Locale.ENGLISH));
+            variable = lookupVariable(simple, variables);
             if (variable != null) {
                 return variable;
             }
-        }
-        VariableReferenceExpression variable = variables.get(normalized.toLowerCase(Locale.ENGLISH));
-        if (variable != null) {
-            return variable;
         }
         System.out.println("[OpengaussPlanAdapter] parseValue unresolved normalized=" + normalized + " variables=" + variables.keySet());
         return null;
@@ -2694,18 +2776,41 @@ public class OpengaussPlanAdapter
 
     private VariableReferenceExpression lookupVariable(String token, Map<String, VariableReferenceExpression> variables)
     {
-        String normalizedToken = token == null ? "" : token.toLowerCase(Locale.ENGLISH);
-        String simple = simpleName(token).toLowerCase(Locale.ENGLISH);
-        VariableReferenceExpression direct = variables.get(simple);
+        if (token == null || variables == null || variables.isEmpty()) {
+            return null;
+        }
+        String normalizedToken = canonicalizeExpressionText(token).trim().toLowerCase(Locale.ENGLISH);
+        normalizedToken = stripQuotes(normalizedToken);
+        String simple = simpleName(normalizedToken).toLowerCase(Locale.ENGLISH);
+
+        VariableReferenceExpression direct = variables.get(normalizedToken);
         if (direct != null) {
             return direct;
         }
-        direct = variables.get(normalizedToken);
+        direct = variables.get(simple);
         if (direct != null) {
             return direct;
         }
+
+        String dottedTail = normalizedToken;
+        if (normalizedToken.contains(".")) {
+            dottedTail = normalizedToken.substring(normalizedToken.lastIndexOf('.') + 1);
+            direct = variables.get(dottedTail);
+            if (direct != null) {
+                return direct;
+            }
+        }
+
         for (Map.Entry<String, VariableReferenceExpression> entry : variables.entrySet()) {
-            if (normalizedToken.contains(entry.getKey()) || entry.getKey().contains(simple)) {
+            String key = entry.getKey();
+            if (key == null) {
+                continue;
+            }
+            String normalizedKey = key.toLowerCase(Locale.ENGLISH);
+            if (normalizedToken.equals(normalizedKey) || simple.equals(normalizedKey) || dottedTail.equals(normalizedKey)) {
+                return entry.getValue();
+            }
+            if (normalizedToken.startsWith(normalizedKey + ".") || normalizedToken.endsWith("." + normalizedKey) || normalizedToken.contains("." + normalizedKey + ".")) {
                 return entry.getValue();
             }
         }
@@ -2775,6 +2880,51 @@ public class OpengaussPlanAdapter
             }
         }
         return null;
+    }
+
+    private VariableReferenceExpression selectCaseWhenVariable(String expression, Map<String, VariableReferenceExpression> variables)
+    {
+        if (expression == null || variables == null || variables.isEmpty()) {
+            return null;
+        }
+        String normalized = stripUnmatchedOuterParens(canonicalizeExpressionText(expression).trim()).toLowerCase(Locale.ENGLISH);
+        if (!normalized.contains("case when")) {
+            return lookupVariableByExpressionShape(expression, variables);
+        }
+        String conditionShape = normalized;
+        int whenIndex = conditionShape.indexOf("case when");
+        int thenIndex = conditionShape.indexOf(" then ", whenIndex);
+        if (thenIndex > whenIndex) {
+            conditionShape = conditionShape.substring(whenIndex + "case when".length(), thenIndex).trim();
+        }
+        boolean wantsAnd = conditionShape.contains(" and ") || conditionShape.contains("<>");
+        boolean wantsOr = conditionShape.contains(" or ") || conditionShape.contains("=");
+        VariableReferenceExpression best = null;
+        int bestScore = -1;
+        for (VariableReferenceExpression variable : variables.values()) {
+            if (variable == null || variable.getName() == null) {
+                continue;
+            }
+            String name = variable.getName().toLowerCase(Locale.ENGLISH);
+            if (!name.contains("sum_case_when")) {
+                continue;
+            }
+            int score = 0;
+            if (wantsAnd && name.contains("_and_")) {
+                score += 10;
+            }
+            if (wantsOr && name.contains("_or_")) {
+                score += 10;
+            }
+            if (normalized.contains(name.replace("_raw", ""))) {
+                score += 5;
+            }
+            if (score > bestScore) {
+                bestScore = score;
+                best = variable;
+            }
+        }
+        return best;
     }
 
     private VariableReferenceExpression resolveJoinVariable(PlanNode node, String name)
@@ -3568,32 +3718,48 @@ public class OpengaussPlanAdapter
         if ("count".equalsIgnoreCase(functionName) && ("*".equals(inside) || "1".equals(inside))) {
             return new AggregationCallSpec("count", inferAggregationSemanticNames(node, source), List.of(new ConstantExpression(1L, BigintType.BIGINT)), BigintType.BIGINT);
         }
-        if (isAggregationFunctionCall(inside)) {
+        VariableReferenceExpression directInsideVariable = lookupVariable(inside, variables);
+        if (directInsideVariable != null) {
+            inside = directInsideVariable.getName();
+        }
+        else if (isAggregationFunctionCall(inside)) {
             int nestedOpen = inside.indexOf('(');
             int nestedClose = inside.lastIndexOf(')');
             if (nestedOpen >= 0 && nestedClose > nestedOpen) {
-                inside = inside.substring(nestedOpen + 1, nestedClose).trim();
+                String nestedInside = inside.substring(nestedOpen + 1, nestedClose).trim();
+                VariableReferenceExpression nestedVariable = lookupVariable(nestedInside, variables);
+                if (nestedVariable != null) {
+                    inside = nestedVariable.getName();
+                }
+                else {
+                    inside = nestedInside;
+                }
             }
         }
+        VariableReferenceExpression shapedCaseVariable = selectCaseWhenVariable(inside, variables);
+        if (shapedCaseVariable != null) {
+            inside = shapedCaseVariable.getName();
+        }
         RowExpression argument = parseAggregationArgumentExpression(inside, variables);
-        if ("avg".equalsIgnoreCase(functionName)) {
-            VariableReferenceExpression avgPreferred = selectBestMatchingVariable(variables, inside, "avg");
-            if (avgPreferred != null) {
+        if ("avg".equalsIgnoreCase(functionName) || "sum".equalsIgnoreCase(functionName)) {
+            String keyword = functionName.toLowerCase(Locale.ENGLISH);
+            VariableReferenceExpression preferred = selectBestMatchingVariable(variables, inside, keyword);
+            if (preferred != null) {
                 if (argument == null) {
-                    argument = avgPreferred;
+                    argument = preferred;
                 }
                 else if (argument instanceof VariableReferenceExpression) {
                     String argName = ((VariableReferenceExpression) argument).getName().toLowerCase(Locale.ENGLISH);
-                    String preferredName = avgPreferred.getName().toLowerCase(Locale.ENGLISH);
+                    String preferredName = preferred.getName().toLowerCase(Locale.ENGLISH);
                     List<String> expressionTokens = extractExpressionTokens(inside);
                     boolean matchesPreferred = expressionTokens.stream().anyMatch(token -> preferredName.contains(token.toLowerCase(Locale.ENGLISH)) || token.toLowerCase(Locale.ENGLISH).contains(preferredName));
                     boolean matchesArgument = expressionTokens.stream().anyMatch(token -> argName.contains(token.toLowerCase(Locale.ENGLISH)) || token.toLowerCase(Locale.ENGLISH).contains(argName));
-                    if ((!matchesArgument && matchesPreferred) || argName.contains("sum") || !argName.contains("avg")) {
-                        argument = avgPreferred;
+                    if ((!matchesArgument && matchesPreferred) || argName.contains("sum") || (!argName.contains(keyword))) {
+                        argument = preferred;
                     }
                 }
                 else if (argument instanceof ConstantExpression) {
-                    argument = avgPreferred;
+                    argument = preferred;
                 }
             }
         }
@@ -3629,9 +3795,6 @@ public class OpengaussPlanAdapter
         if ("avg".equalsIgnoreCase(functionName)) {
             returnType = DoubleType.DOUBLE;
         }
-        else if ("sum".equalsIgnoreCase(functionName)) {
-            returnType = DoubleType.DOUBLE;
-        }
         if ("count".equalsIgnoreCase(functionName)) {
             returnType = BigintType.BIGINT;
         }
@@ -3649,12 +3812,21 @@ public class OpengaussPlanAdapter
         }
         String normalized = stripUnmatchedOuterParens(canonicalizeExpressionText(text).trim());
         String lower = normalized.toLowerCase(Locale.ENGLISH);
+
+        VariableReferenceExpression directVariable = lookupVariable(normalized, variables);
+        if (directVariable != null) {
+            return directVariable;
+        }
         if (lower.startsWith("case when") || lower.contains(" case when ")) {
             return parseCaseWhen(normalized, variables, false);
         }
         if (lower.startsWith("pg_catalog.")) {
             normalized = normalized.substring("pg_catalog.".length()).trim();
             lower = normalized.toLowerCase(Locale.ENGLISH);
+            directVariable = lookupVariable(normalized, variables);
+            if (directVariable != null) {
+                return directVariable;
+            }
         }
 
         // If we are handed another aggregation call (for example, sum(sum(x)) or
@@ -3956,9 +4128,6 @@ public class OpengaussPlanAdapter
                 return new ConstantExpression(((Number) value).doubleValue(), DoubleType.DOUBLE);
             }
         }
-        if (isNumericType(expression.getType())) {
-            return new ConstantExpression(1.0, DoubleType.DOUBLE);
-        }
         return expression;
     }
 
@@ -4012,9 +4181,7 @@ public class OpengaussPlanAdapter
                     return new ConstantExpression(Double.valueOf(text), DoubleType.DOUBLE);
                 }
             }
-            if (operand instanceof VariableReferenceExpression && isNumericType(operand.getType()) && !(operand.getType() instanceof DoubleType)) {
-                return new ConstantExpression(1.0, DoubleType.DOUBLE);
-            }
+            return operand;
         }
         if (targetType instanceof BigintType) {
             if (operand instanceof ConstantExpression && text.matches("-?\\d+")) {
@@ -4048,13 +4215,15 @@ public class OpengaussPlanAdapter
         List<RowExpression> adjustedArguments = new ArrayList<>();
         List<TypeSignatureProvider> parameterTypes = new ArrayList<>();
         List<Type> argumentTypes = new ArrayList<>();
-        boolean forceDoubleArguments = "sum".equalsIgnoreCase(functionName) || "avg".equalsIgnoreCase(functionName);
+        boolean forceDoubleArguments = "avg".equalsIgnoreCase(functionName);
         for (RowExpression argument : arguments) {
             RowExpression adjusted = argument;
-            if (forceDoubleArguments && argument instanceof ConstantExpression && argument.getType() != null && !DoubleType.DOUBLE.equals(argument.getType())) {
-                Object value = ((ConstantExpression) argument).getValue();
-                if (value instanceof Number) {
-                    adjusted = new ConstantExpression(((Number) value).doubleValue(), DoubleType.DOUBLE);
+            if (forceDoubleArguments && argument != null && argument.getType() != null && !DoubleType.DOUBLE.equals(argument.getType())) {
+                if (argument instanceof ConstantExpression) {
+                    Object value = ((ConstantExpression) argument).getValue();
+                    if (value instanceof Number) {
+                        adjusted = new ConstantExpression(((Number) value).doubleValue(), DoubleType.DOUBLE);
+                    }
                 }
             }
             Type argumentType = adjusted == null ? null : adjusted.getType();
