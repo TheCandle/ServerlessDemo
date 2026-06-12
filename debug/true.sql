@@ -1,26 +1,13 @@
 select
-	l_shipmode,
-	sum(case
-		when o_orderpriority = '1-URGENT'
-			or o_orderpriority = '2-HIGH'
-			then 1
+	100.00 * sum(case
+		when p_type like 'PROMO%'
+			then l_extendedprice * (1 - l_discount)
 		else 0
-	end) as high_line_count,
-	sum(case
-		when o_orderpriority <> '1-URGENT'
-			and o_orderpriority <> '2-HIGH'
-			then 1
-		else 0
-	end) as low_line_count
+	end) / sum(l_extendedprice * (1 - l_discount)) as promo_revenue
 from
-	orders,
-	lineitem
+	lineitem,
+	part
 where
-	o_orderkey = l_orderkey
-	and l_shipmode in ('RAIL', 'MAIL')
-	and l_commitdate < l_receiptdate
-	and l_shipdate < l_commitdate
-	and l_receiptdate >= date '1995-01-01'
-	and l_receiptdate < date '1995-01-01' + interval '1' year
-group by
-	l_shipmode;
+	l_partkey = p_partkey
+	and l_shipdate >= date '1995-02-01'
+	and l_shipdate < date '1995-02-01' + interval '1' month;

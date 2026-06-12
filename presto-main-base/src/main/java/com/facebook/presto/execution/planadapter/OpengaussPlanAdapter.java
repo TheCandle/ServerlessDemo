@@ -17,7 +17,10 @@ import com.facebook.presto.common.type.VarcharType;
 import com.facebook.presto.execution.QueryStateMachine;
 import com.facebook.presto.execution.TpchSchemaRegistry;
 import com.facebook.presto.metadata.BuiltInFunctionHandle;
+import com.facebook.presto.metadata.CastType;
 import com.facebook.presto.metadata.Metadata;
+import com.facebook.presto.spi.function.FunctionHandle;
+import com.facebook.presto.type.LikePatternType;
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.TableHandle;
 import com.facebook.presto.spi.TableMetadata;
@@ -88,6 +91,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.regex.Pattern;
 
 public class OpengaussPlanAdapter
 {
@@ -476,6 +480,15 @@ public class OpengaussPlanAdapter
         List<VariableReferenceExpression> outputVariables = new ArrayList<>(left.getOutputVariables());
         outputVariables.addAll(right.getOutputVariables());
 
+        System.out.println("[OpengaussPlanAdapter] join debug type=" + joinTypeText
+                + " condition=" + joinCondition
+                + " leftOutputs=" + left.getOutputVariables()
+                + " rightOutputs=" + right.getOutputVariables()
+                + " criteria=" + criteria
+                + " joinNodeOutputs=" + outputVariables);
+//        System.out.println("[OpengaussPlanAdapter] join left tree=" + describePlanTree(left));
+//        System.out.println("[OpengaussPlanAdapter] join right tree=" + describePlanTree(right));
+
         PlanNode join = new JoinNode(Optional.empty(), context.getIdAllocator().getNextId(), joinType, left, right, criteria, outputVariables, Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty(), Collections.emptyMap());
         if (text(node, "Join Filter") != null) {
             RowExpression filter = parsePredicate(text(node, "Join Filter"), buildVariablesByOutput(join), context);
@@ -648,6 +661,8 @@ public class OpengaussPlanAdapter
         }
 
         PlanNode source = translateNode(child, context, scalarBindings);
+        System.out.println("[OpengaussPlanAdapter] aggregation input source output=" + source.getOutputVariables());
+        // System.out.println("[OpengaussPlanAdapter] aggregation input source tree=" + describePlanTree(source));
         List<VariableReferenceExpression> groupingKeys = new ArrayList<>();
         Map<String, VariableReferenceExpression> variables = buildVariablesByOutput(source);
         List<String> groupKeyTokens = textList(node, "Group Key");
@@ -695,7 +710,15 @@ public class OpengaussPlanAdapter
                     aggOutputNames.add(outputName);
                     aggSpecs.add(spec);
                     for (RowExpression argument : spec.getArguments()) {
+                        System.out.println("[OpengaussPlanAdapter] aggregation spec arg output=" + outputName
+                                + " function=" + spec.getFunctionName()
+                                + " argument=" + argument);
+                        List<VariableReferenceExpression> beforeDeps = new ArrayList<>(aggDependencyOutputs);
                         collectVariableDependencies(argument, dependencyLookup, aggDependencyOutputs);
+                        if (aggDependencyOutputs.size() != beforeDeps.size()) {
+                            System.out.println("[OpengaussPlanAdapter] aggregation deps updated output=" + outputName
+                                    + " deps=" + aggDependencyOutputs);
+                        }
                     }
                     parsedAggregation = true;
                 }
@@ -1848,6 +1871,11 @@ public class OpengaussPlanAdapter
             }
         }
 
+        RowExpression likeExpression = parseLikeExpression(normalized, variables);
+        if (likeExpression != null) {
+            return likeExpression;
+        }
+
         VariableReferenceExpression scalar = variables.get(normalized.toLowerCase(Locale.ENGLISH));
         if (scalar != null) {
             return scalar;
@@ -2021,6 +2049,114 @@ public class OpengaussPlanAdapter
             }
         }
         return new SpecialFormExpression(SpecialFormExpression.Form.IN, BooleanType.BOOLEAN, arguments);
+    }
+
+    private RowExpression parseLikeExpression(String normalized, Map<String, VariableReferenceExpression> variables)
+    {
+        if (normalized == null || normalized.isBlank()) {
+            return null;
+        }
+        String upper = normalized.toUpperCase(Locale.ENGLISH);
+        boolean negated = false;
+        int likeIndex = findTopLevelDelimiter(upper, " NOT LIKE ");
+        if (likeIndex > 0) {
+            negated = true;
+        }
+        else {
+            likeIndex = findTopLevelDelimiter(upper, " LIKE ");
+        }
+        if (likeIndex <= 0) {
+            return null;
+        }
+        String leftText = stripUnmatchedOuterParens(normalized.substring(0, likeIndex).trim());
+        String rightText = normalized.substring(likeIndex + (negated ? 10 : 6)).trim();
+        if (leftText.contains(".")) {
+            leftText = leftText.substring(leftText.lastIndexOf('.') + 1);
+        }
+        int escapeIndex = findTopLevelDelimiter(rightText.toUpperCase(Locale.ENGLISH), " ESCAPE ");
+        if (escapeIndex > 0) {
+            rightText = rightText.substring(0, escapeIndex).trim();
+        }
+        // Use parseValue so that column references (e.g. p_type) are resolved to the
+        // *exact* VariableReferenceExpression instance present in the source plan.
+        // Using getRowExpression() here would create a fresh instance that is not
+        // reference-equal to the source output, causing ValidateDependenciesChecker
+        // to report "Expression dependencies not in source plan output".
+        RowExpression left = parseValue(leftText, variables);
+        if (left == null) {
+            left = lookupVariable(leftText, variables);
+        }
+        if (left == null) {
+            return null;
+        }
+        // Coerce value side to VARCHAR so it matches the like(varchar, LikePattern) signature.
+        left = coerceExpressionToTextType(left, VarcharType.VARCHAR);
+
+        // Build the pattern side: CAST(pattern varchar -> LikePattern) then like(value, pattern).
+        // We use metadata.getFunctionAndTypeManager().lookupFunction() to resolve the exact
+        // FunctionHandle registered in this Presto build, avoiding hard-coded signature mismatches.
+        String patternStr = stripQuotes(rightText);
+        RowExpression patternVarchar = varcharConstant(patternStr);
+
+        FunctionHandle castHandle = metadata.getFunctionAndTypeManager().lookupCast(
+                CastType.CAST,
+                VarcharType.VARCHAR,
+                LikePatternType.LIKE_PATTERN);
+        RowExpression likePattern = new CallExpression(
+                "$operator$cast",
+                castHandle,
+                LikePatternType.LIKE_PATTERN,
+                List.of(patternVarchar));
+
+        FunctionHandle likeHandle = metadata.getFunctionAndTypeManager().lookupFunction(
+                "like",
+                TypeSignatureProvider.fromTypes(VarcharType.VARCHAR, LikePatternType.LIKE_PATTERN));
+        RowExpression like = new CallExpression(
+                "like",
+                likeHandle,
+                BooleanType.BOOLEAN,
+                List.of(left, likePattern));
+
+        if (!negated) {
+            return like;
+        }
+        return new CallExpression("not", builtInUnaryHandle("not", BooleanType.BOOLEAN, BooleanType.BOOLEAN), BooleanType.BOOLEAN, List.of(like));
+    }
+
+    private String sqlLikePatternToRegex(String pattern)
+    {
+        if (pattern == null) {
+            return null;
+        }
+        StringBuilder regex = new StringBuilder();
+        regex.append("^");
+        boolean escaping = false;
+        for (int i = 0; i < pattern.length(); i++) {
+            char c = pattern.charAt(i);
+            if (escaping) {
+                regex.append(Pattern.quote(String.valueOf(c)));
+                escaping = false;
+                continue;
+            }
+            if (c == '\\') {
+                escaping = true;
+                continue;
+            }
+            if (c == '%') {
+                regex.append(".*");
+            }
+            else if (c == '_') {
+                regex.append('.');
+            }
+            else if ("[](){}.*+?$^|#".indexOf(c) >= 0) {
+                regex.append('\\').append(c);
+            }
+            else {
+                regex.append(c);
+            }
+        }
+        regex.append("$");
+        return regex.toString();
     }
 
     private List<RowExpression> parseAnyArrayValues(String text, Map<String, VariableReferenceExpression> variables, Type elementType)
@@ -2929,15 +3065,47 @@ public class OpengaussPlanAdapter
 
     private VariableReferenceExpression resolveJoinVariable(PlanNode node, String name)
     {
-        String simple = simpleName(name).toLowerCase(Locale.ENGLISH);
+        if (node == null || name == null || name.isBlank()) {
+            return null;
+        }
+
+        String normalized = canonicalizeExpressionText(name).trim().toLowerCase(Locale.ENGLISH);
+        String simple = simpleName(normalized).toLowerCase(Locale.ENGLISH);
+        String compact = normalized.replaceAll("[^a-z0-9_]+", "");
+        String compactSimple = simple.replaceAll("[^a-z0-9_]+", "");
+
         for (VariableReferenceExpression variable : node.getOutputVariables()) {
-            if (variable.getName().equalsIgnoreCase(simple)) {
+            String variableName = variable.getName() == null ? "" : variable.getName().toLowerCase(Locale.ENGLISH);
+            String variableSimple = simpleName(variableName).toLowerCase(Locale.ENGLISH);
+            String variableCompact = variableName.replaceAll("[^a-z0-9_]+", "");
+            String variableCompactSimple = variableSimple.replaceAll("[^a-z0-9_]+", "");
+
+            if (normalized.equals(variableName)
+                    || simple.equals(variableName)
+                    || normalized.equals(variableSimple)
+                    || simple.equals(variableSimple)
+                    || compact.equals(variableCompact)
+                    || compact.equals(variableCompactSimple)
+                    || compactSimple.equals(variableCompact)
+                    || compactSimple.equals(variableCompactSimple)) {
                 return variable;
             }
         }
+
         for (VariableReferenceExpression variable : node.getOutputVariables()) {
-            if (simple.contains(variable.getName().toLowerCase(Locale.ENGLISH)) || variable.getName().toLowerCase(Locale.ENGLISH).contains(simple)) {
+            String variableName = variable.getName() == null ? "" : variable.getName().toLowerCase(Locale.ENGLISH);
+            if (normalized.contains(variableName)
+                    || variableName.contains(normalized)
+                    || simple.contains(variableName)
+                    || variableName.contains(simple)) {
                 return variable;
+            }
+        }
+
+        for (PlanNode source : node.getSources()) {
+            VariableReferenceExpression resolved = resolveJoinVariable(source, name);
+            if (resolved != null) {
+                return resolved;
             }
         }
         return null;
@@ -3468,6 +3636,38 @@ public class OpengaussPlanAdapter
     private ConstantExpression varcharConstant(String value)
     {
         return new ConstantExpression(value == null ? null : Slices.utf8Slice(value), VarcharType.VARCHAR);
+    }
+
+    private RowExpression coerceExpressionToTextType(RowExpression expression, Type targetType)
+    {
+        if (expression == null || targetType == null || expression.getType() == null || expression.getType().equals(targetType)) {
+            return expression;
+        }
+        if (!(targetType instanceof VarcharType)) {
+            return expression;
+        }
+        if (expression instanceof ConstantExpression) {
+            Object value = ((ConstantExpression) expression).getValue();
+            return new ConstantExpression(value, targetType);
+        }
+        return expression;
+    }
+
+    private Type widenTextType(Type leftType, Type rightType)
+    {
+        if (leftType == null) {
+            return rightType;
+        }
+        if (rightType == null) {
+            return leftType;
+        }
+        if (leftType.equals(rightType)) {
+            return leftType;
+        }
+        if (isTextType(leftType) && isTextType(rightType)) {
+            return VarcharType.VARCHAR;
+        }
+        return null;
     }
 
     private BuiltInFunctionHandle builtInComparisonHandle(OperatorType type, RowExpression left, RowExpression right)
