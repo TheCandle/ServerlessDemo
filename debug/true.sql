@@ -1,20 +1,33 @@
 select
-	c_count,
-	count(*) as custdist
+	c_name,
+	c_custkey,
+	o_orderkey,
+	o_orderdate,
+	o_totalprice,
+	sum(l_quantity)
 from
-	(
+	customer,
+	orders,
+	lineitem
+where
+	o_orderkey in (
 		select
-			c_custkey,
-			count(o_orderkey)
+			l_orderkey
 		from
-			customer left outer join orders on
-				c_custkey = o_custkey
-				and o_comment not like '%unusual%requests%'
+			lineitem
 		group by
-			c_custkey
-	) as c_orders (c_custkey, c_count)
+			l_orderkey having
+				sum(l_quantity) > 314
+	)
+	and c_custkey = o_custkey
+	and o_orderkey = l_orderkey
 group by
-	c_count
+	c_name,
+	c_custkey,
+	o_orderkey,
+	o_orderdate,
+	o_totalprice
 order by
-	custdist desc,
-	c_count desc;
+	o_totalprice desc,
+	o_orderdate;
+

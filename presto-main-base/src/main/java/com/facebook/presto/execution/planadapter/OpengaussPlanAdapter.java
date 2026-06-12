@@ -369,12 +369,38 @@ public class OpengaussPlanAdapter
 
         PlanNode scan = new TableScanNode(Optional.empty(), context.getIdAllocator().getNextId(), scanTableHandle, outputs, assignments, TupleDomain.all(), TupleDomain.all(), Optional.empty());
         RowExpression predicate = parsePredicate(filterText, variablesByName, context);
+        if (predicate == null) {
+            predicate = parseTopLevelFilterConjuncts(filterText, variablesByName);
+        }
         if (predicate != null) {
             predicate = substituteScalarBindings(predicate, scalarBindings);
             System.out.println("[OpengaussPlanAdapter] buildScan filter=" + filterText + " predicate=" + predicate + " scalarBindings=" + scalarBindings.keySet());
             scan = new FilterNode(Optional.empty(), context.getIdAllocator().getNextId(), scan, predicate);
         }
         return scan;
+    }
+
+    private RowExpression parseTopLevelFilterConjuncts(String filterText, Map<String, VariableReferenceExpression> variables)
+    {
+        if (filterText == null || filterText.isBlank()) {
+            return null;
+        }
+        String normalized = normalizePrestoExpressionText(filterText);
+        normalized = stripUnmatchedOuterParens(normalized);
+        RowExpression combined = null;
+        for (String part : splitTopLevelParts(normalized, " AND ")) {
+            String conjunct = stripUnmatchedOuterParens(part);
+            RowExpression parsed = parseBooleanPredicate(conjunct, variables);
+            if (parsed == null) {
+                parsed = parseExpression(conjunct, variables, false);
+            }
+            if (parsed == null || !BooleanType.BOOLEAN.equals(parsed.getType())) {
+                System.out.println("[OpengaussPlanAdapter] dropping unparsed filter conjunct=" + conjunct + " from filter=" + filterText);
+                continue;
+            }
+            combined = combined == null ? parsed : new SpecialFormExpression(SpecialFormExpression.Form.AND, BooleanType.BOOLEAN, combined, parsed);
+        }
+        return combined;
     }
 
     private Type inferFallbackColumnType(QualifiedObjectName tableName, String columnName, Type fallbackType)
@@ -444,6 +470,23 @@ public class OpengaussPlanAdapter
             }
             if (filteringJoinVariable == null && !filteringSide.getOutputVariables().isEmpty()) {
                 filteringJoinVariable = filteringSide.getOutputVariables().get(0);
+            }
+            if (sourceJoinVariable != null && filteringJoinVariable != null
+                    && sourceJoinVariable.getType() != null
+                    && filteringJoinVariable.getType() != null
+                    && !sourceJoinVariable.getType().equals(filteringJoinVariable.getType())) {
+                VariableReferenceExpression coercedFilteringJoinVariable = context.getVariableAllocator().newVariable(filteringJoinVariable.getName(), sourceJoinVariable.getType());
+                Map<VariableReferenceExpression, RowExpression> assignments = new LinkedHashMap<>();
+                for (VariableReferenceExpression variable : filteringSide.getOutputVariables()) {
+                    assignments.put(variable, variable);
+                }
+                assignments.put(coercedFilteringJoinVariable, coerceJoinKeyExpression(filteringJoinVariable, sourceJoinVariable.getType()));
+                filteringSide = new ProjectNode(Optional.empty(), context.getIdAllocator().getNextId(), filteringSide, Assignments.copyOf(assignments), ProjectNode.Locality.LOCAL);
+                System.out.println("[OpengaussPlanAdapter] semi join key coerced condition=" + joinCondition
+                        + " sourceKey=" + sourceJoinVariable + ":" + sourceJoinVariable.getType()
+                        + " filteringKey=" + filteringJoinVariable + ":" + filteringJoinVariable.getType()
+                        + " coercedFilteringKey=" + coercedFilteringJoinVariable + ":" + coercedFilteringJoinVariable.getType());
+                filteringJoinVariable = coercedFilteringJoinVariable;
             }
             VariableReferenceExpression semiOutput = context.getVariableAllocator().newVariable("semi_join", BooleanType.BOOLEAN);
             SemiJoinNode semiJoin = new SemiJoinNode(
@@ -565,31 +608,7 @@ public class OpengaussPlanAdapter
             }
             String candidateName = candidate.getName() == null ? "" : candidate.getName().toLowerCase(Locale.ENGLISH);
             String candidateBase = stripVariableIdSuffix(simpleName(candidateName).toLowerCase(Locale.ENGLISH));
-            int score = 0;
-            if (candidateName.equals(simple) || candidateBase.equals(baseSimple)) {
-                score += 100;
-            }
-            if (candidateName.contains(simple) || simple.contains(candidateName) || candidateBase.contains(baseSimple) || baseSimple.contains(candidateBase)) {
-                score += 40;
-            }
-            if (baseSimple.contains("count") && candidateName.contains("count")) {
-                score += 80;
-            }
-            if (baseSimple.contains("sum") && candidateName.contains("sum")) {
-                score += 80;
-            }
-            if (baseSimple.contains("avg") && candidateName.contains("avg")) {
-                score += 80;
-            }
-            if (baseSimple.contains("min") && candidateName.contains("min")) {
-                score += 80;
-            }
-            if (baseSimple.contains("max") && candidateName.contains("max")) {
-                score += 80;
-            }
-            if (baseSimple.endsWith("key") && candidateBase.endsWith("key")) {
-                score += 20;
-            }
+            int score = scoreSubqueryOutputAlias(baseSimple, candidateName, candidateBase);
             if (score > bestScore) {
                 bestScore = score;
                 best = candidate;
@@ -605,6 +624,48 @@ public class OpengaussPlanAdapter
             }
         }
         return null;
+    }
+
+    private int scoreSubqueryOutputAlias(String outputBaseName, String candidateName, String candidateBaseName)
+    {
+        int score = 0;
+        if (candidateName.equals(outputBaseName) || candidateBaseName.equals(outputBaseName)) {
+            score += 100;
+        }
+        if (candidateName.contains(outputBaseName) || outputBaseName.contains(candidateName) || candidateBaseName.contains(outputBaseName) || outputBaseName.contains(candidateBaseName)) {
+            score += 40;
+        }
+        if (outputBaseName.contains("count") && candidateName.contains("count")) {
+            score += 80;
+        }
+        if (outputBaseName.contains("sum") && candidateName.contains("sum")) {
+            score += 80;
+        }
+        if (outputBaseName.contains("avg") && candidateName.contains("avg")) {
+            score += 80;
+        }
+        if (outputBaseName.contains("min") && candidateName.contains("min")) {
+            score += 80;
+        }
+        if (outputBaseName.contains("max") && candidateName.contains("max")) {
+            score += 80;
+        }
+        if ((outputBaseName.contains("revenue") || outputBaseName.contains("amount") || outputBaseName.contains("price") || outputBaseName.contains("cost"))
+                && (candidateName.contains("sum") || candidateName.contains("revenue") || candidateName.contains("amount") || candidateName.contains("price") || candidateName.contains("cost"))) {
+            score += 90;
+        }
+        if ((outputBaseName.contains("supplier_no") || outputBaseName.contains("suppkey") || outputBaseName.contains("supp_key"))
+                && (candidateName.contains("suppkey") || candidateName.contains("supp_key") || candidateName.contains("supplier_no"))) {
+            score += 90;
+        }
+        if ((outputBaseName.contains("customer_no") || outputBaseName.contains("custkey") || outputBaseName.contains("cust_key"))
+                && (candidateName.contains("custkey") || candidateName.contains("cust_key") || candidateName.contains("customer_no"))) {
+            score += 90;
+        }
+        if (outputBaseName.endsWith("key") && candidateBaseName.endsWith("key")) {
+            score += 20;
+        }
+        return score;
     }
 
     private PlanNode buildExchange(JsonNode node, AdapterContext context, Map<String, VariableReferenceExpression> scalarBindings)
@@ -1782,6 +1843,7 @@ public class OpengaussPlanAdapter
         normalized = normalizeCastSyntax(normalized);
         normalized = normalized.replace("::text", "");
         normalized = normalized.replace("::bpchar", "");
+        normalized = normalized.replace("!~~", "NOT LIKE");
         normalized = normalized.replace("~~", "LIKE");
         normalized = normalized.replace("ILIKE", "LIKE");
         normalized = normalized.replaceAll("\\bTRUE\\b", "true").replaceAll("\\bFALSE\\b", "false");
@@ -1846,10 +1908,48 @@ public class OpengaussPlanAdapter
             }
         }
 
-        int anyIndex = normalized.toUpperCase(Locale.ENGLISH).indexOf("= ANY");
+        List<String> andParts = splitTopLevelParts(normalized, " AND ");
+        if (andParts.size() > 1) {
+            RowExpression combined = null;
+            for (String part : andParts) {
+                RowExpression parsedPart = parseBooleanPredicate(part, variables);
+                if (parsedPart == null) {
+                    parsedPart = parseExpression(part, variables, false);
+                }
+                if (parsedPart == null) {
+                    combined = null;
+                    break;
+                }
+                combined = combined == null ? parsedPart : new SpecialFormExpression(SpecialFormExpression.Form.AND, BooleanType.BOOLEAN, combined, parsedPart);
+            }
+            if (combined != null) {
+                return combined;
+            }
+        }
+
+        List<String> orParts = splitTopLevelParts(normalized, " OR ");
+        if (orParts.size() > 1) {
+            RowExpression combined = null;
+            for (String part : orParts) {
+                RowExpression parsedPart = parseBooleanPredicate(part, variables);
+                if (parsedPart == null) {
+                    parsedPart = parseExpression(part, variables, false);
+                }
+                if (parsedPart == null) {
+                    combined = null;
+                    break;
+                }
+                combined = combined == null ? parsedPart : new SpecialFormExpression(SpecialFormExpression.Form.OR, BooleanType.BOOLEAN, combined, parsedPart);
+            }
+            if (combined != null) {
+                return combined;
+            }
+        }
+
+        int anyIndex = findTopLevelDelimiter(normalized.toUpperCase(Locale.ENGLISH), "= ANY");
         if (anyIndex > 0) {
             String leftText = stripUnmatchedOuterParens(normalized.substring(0, anyIndex).trim());
-            String rightText = normalized.substring(anyIndex + 5).trim();
+            String rightText = normalized.substring(anyIndex + "= ANY".length()).trim();
             RowExpression left = parseValue(leftText, variables);
             List<RowExpression> rightValues = parseAnyArrayValues(rightText, variables, left == null ? null : left.getType());
             if (left != null && rightValues != null && !rightValues.isEmpty()) {
@@ -2157,10 +2257,31 @@ public class OpengaussPlanAdapter
         for (String value : values) {
             String v = stripQuotes(value.trim());
             if (!v.isEmpty()) {
-                arguments.add(parseValue(v, variables));
+                RowExpression argument = parseValue(v, variables);
+                if (argument != null) {
+                    argument = coerceInListValue(argument, left.getType());
+                    arguments.add(argument);
+                }
             }
         }
         return new SpecialFormExpression(SpecialFormExpression.Form.IN, BooleanType.BOOLEAN, arguments);
+    }
+
+    private RowExpression coerceInListValue(RowExpression value, Type targetType)
+    {
+        if (value == null || targetType == null || value.getType() == null || value.getType().equals(targetType)) {
+            return value;
+        }
+        if (isNumericType(targetType) && value instanceof ConstantExpression && isNumericType(value.getType())) {
+            return coerceNumericConstant(value, targetType);
+        }
+        if (isDateLikeType(targetType) && value instanceof ConstantExpression) {
+            return coerceToDateConstant((ConstantExpression) value);
+        }
+        if ((targetType instanceof VarcharType || VarcharType.VARCHAR.equals(targetType)) && value instanceof ConstantExpression) {
+            return coerceExpressionToTextType(value, targetType);
+        }
+        return value;
     }
 
     private RowExpression parseLikeExpression(String normalized, Map<String, VariableReferenceExpression> variables)
@@ -2323,6 +2444,7 @@ public class OpengaussPlanAdapter
                 if (parsed == null) {
                     parsed = varcharConstant(token);
                 }
+                parsed = coerceInListValue(parsed, elementType);
                 values.add(parsed);
             }
         }
@@ -2343,6 +2465,12 @@ public class OpengaussPlanAdapter
                 return dateConstant(normalized);
             }
             if (isNumericType(elementType) && normalized.matches("-?(?:\\d+\\.\\d+|\\d+|\\.\\d+)") ) {
+                if (normalized.matches("-?\\d+") && isIntegerType(elementType)) {
+                    return new ConstantExpression(Long.valueOf(normalized), elementType);
+                }
+                if (normalized.matches("-?\\d+") && elementType instanceof BigintType) {
+                    return new ConstantExpression(Long.valueOf(normalized), BigintType.BIGINT);
+                }
                 String decimalText = normalized.startsWith(".") ? "0" + normalized : normalized;
                 if (decimalText.startsWith("-.")) {
                     decimalText = "-0" + decimalText.substring(1);
@@ -2658,6 +2786,26 @@ public class OpengaussPlanAdapter
         }
         if (targetType instanceof BigintType || isIntegerType(targetType)) {
             return expression;
+        }
+        return expression;
+    }
+
+    private RowExpression coerceJoinKeyExpression(RowExpression expression, Type targetType)
+    {
+        if (expression == null || targetType == null || expression.getType() == null || expression.getType().equals(targetType)) {
+            return expression;
+        }
+        if (expression instanceof ConstantExpression) {
+            return coerceNumericConstant(expression, targetType);
+        }
+        if (isNumericType(expression.getType()) && isNumericType(targetType)) {
+            try {
+                FunctionHandle castHandle = metadata.getFunctionAndTypeManager().lookupCast(CastType.CAST, expression.getType(), targetType);
+                return new CallExpression("$operator$cast", castHandle, targetType, List.of(expression));
+            }
+            catch (RuntimeException ignored) {
+                return castNumericExpression(expression, targetType);
+            }
         }
         return expression;
     }
