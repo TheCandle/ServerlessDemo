@@ -1,33 +1,37 @@
 select
-	c_name,
-	c_custkey,
-	o_orderkey,
-	o_orderdate,
-	o_totalprice,
-	sum(l_quantity)
+	s_name,
+	s_address
 from
-	customer,
-	orders,
-	lineitem
+	supplier,
+	nation
 where
-	o_orderkey in (
+	s_suppkey in (
 		select
-			l_orderkey
+			ps_suppkey
 		from
-			lineitem
-		group by
-			l_orderkey having
-				sum(l_quantity) > 314
+			partsupp
+		where
+			ps_partkey in (
+				select
+					p_partkey
+				from
+					part
+				where
+					p_name like 'cyan%'
+			)
+			and ps_availqty > (
+				select
+					0.5 * sum(l_quantity)
+				from
+					lineitem
+				where
+					l_partkey = ps_partkey
+					and l_suppkey = ps_suppkey
+					and l_shipdate >= date '1997-01-01'
+					and l_shipdate < date '1997-01-01' + interval '1' year
+			)
 	)
-	and c_custkey = o_custkey
-	and o_orderkey = l_orderkey
-group by
-	c_name,
-	c_custkey,
-	o_orderkey,
-	o_orderdate,
-	o_totalprice
+	and s_nationkey = n_nationkey
+	and n_name = 'BRAZIL'
 order by
-	o_totalprice desc,
-	o_orderdate;
-
+	s_name;
