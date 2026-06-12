@@ -781,8 +781,12 @@ public class OpengaussPlanAdapter
                 + " preProjectOutputs=" + preProjectOutputs
                 + " aggDependencies=" + aggDependencyOutputs);
 
-        Map<VariableReferenceExpression, Aggregation> aggregations = new LinkedHashMap<>();
+        Map<VariableReferenceExpression, Aggregation> partialAggregations = new LinkedHashMap<>();
+        Map<VariableReferenceExpression, Aggregation> finalAggregations = new LinkedHashMap<>();
+        Map<VariableReferenceExpression, Aggregation> partialAggregations = new LinkedHashMap<>();
+        Map<VariableReferenceExpression, Aggregation> finalAggregations = new LinkedHashMap<>();
         List<VariableReferenceExpression> aggOutputs = new ArrayList<>();
+        List<VariableReferenceExpression> finalStageOutputs = new ArrayList<>();
         Map<VariableReferenceExpression, RowExpression> postAggregationAssignments = new LinkedHashMap<>();
         for (int i = 0; i < aggSpecs.size(); i++) {
             AggregationCallSpec spec = aggSpecs.get(i);
@@ -790,7 +794,7 @@ public class OpengaussPlanAdapter
             Type argumentType = spec.getArguments().isEmpty() ? null : spec.getArguments().get(0).getType();
             Type callReturnType = spec.getReturnType() == null ? inferAggregationReturnType(spec.getFunctionName(), argumentType) : spec.getReturnType();
             Type outputType = inferAggregationOutputType(spec.getFunctionName(), spec.getReturnType(), spec.getArguments());
-            VariableReferenceExpression aggregationOutput = context.getVariableAllocator().newVariable(outputName + "_raw", callReturnType);
+            VariableReferenceExpression partialOutput = context.getVariableAllocator().newVariable(outputName + "_partial", callReturnType);
             VariableReferenceExpression output = context.getVariableAllocator().newVariable(outputName, outputType);
             RowExpression argument = spec.getArguments().isEmpty() ? new ConstantExpression(1L, BigintType.BIGINT) : spec.getArguments().get(0);
             if (!isAggregationArgumentAllowed(argument)) {
@@ -799,10 +803,18 @@ public class OpengaussPlanAdapter
                 preProjectAssignments.put(projectedArgument, argument);
                 argument = projectedArgument;
             }
-            CallExpression callExpression = buildAggregationCall(context, spec.getFunctionName(), List.of(argument), callReturnType);
-            aggregations.put(aggregationOutput, new Aggregation(callExpression, Optional.empty(), Optional.empty(), false, Optional.empty()));
-            postAggregationAssignments.put(output, aggregationOutput);
+            CallExpression partialCall = buildAggregationCall(context, spec.getFunctionName(), List.of(argument), callReturnType);
+            partialAggregations.put(partialOutput, new Aggregation(partialCall, Optional.empty(), Optional.empty(), false, Optional.empty()));
+            if ("count".equalsIgnoreCase(spec.getFunctionName())) {
+                CallExpression finalCall = buildAggregationCall(context, "sum", List.of(partialOutput), outputType);
+                finalAggregations.put(output, new Aggregation(finalCall, Optional.empty(), Optional.empty(), false, Optional.empty()));
+            }
+            else {
+                finalAggregations.put(output, new Aggregation(partialOutput, Optional.empty(), Optional.empty(), false, Optional.empty()));
+            }
+            postAggregationAssignments.put(output, output);
             aggOutputs.add(output);
+            finalStageOutputs.add(output);
         }
 
         PlanNode current = source;
@@ -814,11 +826,12 @@ public class OpengaussPlanAdapter
             mergedPreProjectAssignments.putAll(preProjectAssignments);
             current = new ProjectNode(Optional.empty(), context.getIdAllocator().getNextId(), current, Assignments.copyOf(mergedPreProjectAssignments), ProjectNode.Locality.LOCAL);
         }
-        AggregationNode aggregation = new AggregationNode(Optional.empty(), context.getIdAllocator().getNextId(), current, aggregations, AggregationNode.singleGroupingSet(groupingKeys), Collections.emptyList(), AggregationNode.Step.SINGLE, Optional.empty(), Optional.empty(), Optional.empty());
+        AggregationNode partialAggregation = new AggregationNode(Optional.empty(), context.getIdAllocator().getNextId(), current, partialAggregations, AggregationNode.singleGroupingSet(groupingKeys), Collections.emptyList(), AggregationNode.Step.PARTIAL, Optional.empty(), Optional.empty(), Optional.empty());
+        AggregationNode aggregation = new AggregationNode(Optional.empty(), context.getIdAllocator().getNextId(), partialAggregation, finalAggregations, AggregationNode.singleGroupingSet(groupingKeys), Collections.emptyList(), AggregationNode.Step.FINAL, Optional.empty(), Optional.empty(), Optional.empty());
 
         List<VariableReferenceExpression> visibleOutputs = new ArrayList<>();
         visibleOutputs.addAll(preProjectOutputs);
-        visibleOutputs.addAll(aggOutputs);
+        visibleOutputs.addAll(finalStageOutputs);
         List<VariableReferenceExpression> finalOutputs = new ArrayList<>();
         Map<VariableReferenceExpression, RowExpression> projectAssignments = new LinkedHashMap<>();
 
@@ -831,8 +844,7 @@ public class OpengaussPlanAdapter
         for (VariableReferenceExpression v : aggOutputs) {
             if (!projectAssignments.containsKey(v)) {
                 finalOutputs.add(v);
-                RowExpression raw = postAggregationAssignments.get(v);
-                projectAssignments.put(v, raw == null ? v : raw);
+                projectAssignments.put(v, v);
             }
         }
 
@@ -3018,6 +3030,72 @@ public class OpengaussPlanAdapter
         return null;
     }
 
+    /**
+     * Find a variable that was produced by the inner aggregate function applied to a column.
+     * For a two-level aggregate like {@code avg(avg(l_quantity))}, the outer call receives
+     * the result of the inner {@code avg(l_quantity)} which is stored under a variable whose
+     * name contains both the function name and the column name, e.g. {@code avg_l_quantity_}.
+     *
+     * <p>Strategy (in order of preference):
+     * <ol>
+     *   <li>Exact name match: {@code innerFunc + "_" + column} (e.g. {@code avg_l_quantity_})</li>
+     *   <li>Variable name contains both {@code innerFunc} and {@code column} as sub-strings</li>
+     *   <li>Variable name contains {@code column} and starts-with {@code innerFunc}</li>
+     * </ol>
+     */
+    private VariableReferenceExpression lookupVariableByFunctionAndColumn(
+            String innerFuncName,
+            String columnName,
+            Map<String, VariableReferenceExpression> variables)
+    {
+        if (innerFuncName == null || columnName == null || variables == null || variables.isEmpty()) {
+            return null;
+        }
+        String lowerFunc = innerFuncName.toLowerCase(Locale.ENGLISH);
+        String lowerCol = simpleName(columnName).toLowerCase(Locale.ENGLISH);
+
+        // Pass 1: exact prefix match "func_col"
+        for (Map.Entry<String, VariableReferenceExpression> entry : variables.entrySet()) {
+            String varName = entry.getKey().toLowerCase(Locale.ENGLISH);
+            // Strip trailing underscores / _raw suffix for comparison
+            String varBase = varName.replaceAll("_raw$", "").replaceAll("_+$", "");
+            if (varBase.equals(lowerFunc + "_" + lowerCol)
+                    || varBase.startsWith(lowerFunc + "_" + lowerCol)) {
+                return entry.getValue();
+            }
+        }
+
+        // Pass 2: variable name contains both func and col
+        VariableReferenceExpression best = null;
+        int bestScore = -1;
+        for (Map.Entry<String, VariableReferenceExpression> entry : variables.entrySet()) {
+            String varName = entry.getKey().toLowerCase(Locale.ENGLISH);
+            if (!varName.contains(lowerCol)) {
+                continue;
+            }
+            int score = 0;
+            if (varName.contains(lowerFunc)) {
+                score += 10;
+            }
+            if (varName.startsWith(lowerFunc)) {
+                score += 5;
+            }
+            if (varName.contains(lowerFunc + "_" + lowerCol) || varName.contains(lowerFunc + lowerCol)) {
+                score += 20;
+            }
+            if (score > bestScore) {
+                bestScore = score;
+                best = entry.getValue();
+            }
+        }
+        // Only return if we actually found a function match (score > 0 means contains col, but
+        // we also need it to contain the func name to be considered a meaningful match).
+        if (best != null && bestScore >= 10) {
+            return best;
+        }
+        return null;
+    }
+
     private VariableReferenceExpression selectCaseWhenVariable(String expression, Map<String, VariableReferenceExpression> variables)
     {
         if (expression == null || variables == null || variables.isEmpty()) {
@@ -3926,12 +4004,34 @@ public class OpengaussPlanAdapter
             int nestedOpen = inside.indexOf('(');
             int nestedClose = inside.lastIndexOf(')');
             if (nestedOpen >= 0 && nestedClose > nestedOpen) {
+                // The 'inside' here is a nested aggregate call like avg(l_quantity) or sum(l_quantity).
+                // The outer aggregate function (functionName) operates on the *result* of this inner
+                // aggregate.  So we should look up the variable produced by the inner aggregate node
+                // (e.g. avg_l_quantity_, sum_l_quantity_) rather than the raw column name.
+                String innerFuncName = inside.substring(0, nestedOpen).trim().toLowerCase(Locale.ENGLISH);
+                // Strip pg_catalog prefix if present
+                if (innerFuncName.startsWith("pg_catalog.")) {
+                    innerFuncName = innerFuncName.substring("pg_catalog.".length()).trim();
+                }
                 String nestedInside = inside.substring(nestedOpen + 1, nestedClose).trim();
-                VariableReferenceExpression nestedVariable = lookupVariable(nestedInside, variables);
+                // Strip extra parens around nestedInside
+                while (nestedInside.startsWith("(") && nestedInside.endsWith(")") && matchingParens(nestedInside)) {
+                    nestedInside = nestedInside.substring(1, nestedInside.length() - 1).trim();
+                }
+                // 1. First try: look for a variable that captures both the inner function name and
+                //    the column name (e.g. "avg_l_quantity_" for avg(l_quantity)).
+                //    This is the correct reference for a two-level aggregation like avg(avg(l_quantity)).
+                VariableReferenceExpression nestedVariable = lookupVariableByFunctionAndColumn(innerFuncName, nestedInside, variables);
+                if (nestedVariable == null) {
+                    // 2. Fallback: exact lookup of the inner-column name itself
+                    nestedVariable = lookupVariable(nestedInside, variables);
+                }
                 if (nestedVariable != null) {
                     inside = nestedVariable.getName();
                 }
                 else {
+                    // 3. Last resort: use the bare column name so that later heuristics can
+                    //    at least try to find the right variable via selectBestMatchingVariable.
                     inside = nestedInside;
                 }
             }
@@ -3944,6 +4044,39 @@ public class OpengaussPlanAdapter
         if ("avg".equalsIgnoreCase(functionName) || "sum".equalsIgnoreCase(functionName)) {
             String keyword = functionName.toLowerCase(Locale.ENGLISH);
             VariableReferenceExpression preferred = selectBestMatchingVariable(variables, inside, keyword);
+            if ("avg".equalsIgnoreCase(functionName)) {
+                VariableReferenceExpression avgPreferred = selectBestMatchingVariable(variables, inside, "avg");
+                if (avgPreferred != null) {
+                    preferred = avgPreferred;
+                }
+
+                if (argument instanceof VariableReferenceExpression) {
+                    String argName = ((VariableReferenceExpression) argument).getName().toLowerCase(Locale.ENGLISH);
+                    if (argName.startsWith("sum_") || argName.contains("sum")) {
+                        String semanticCandidateName = argName.replaceFirst("(?i)^sum", "avg");
+                        VariableReferenceExpression semanticCandidate = lookupVariable(semanticCandidateName, variables);
+                        if (semanticCandidate == null) {
+                            semanticCandidate = lookupVariable(semanticCandidateName.replace("_raw", ""), variables);
+                        }
+                        if (semanticCandidate != null) {
+                            argument = semanticCandidate;
+                        }
+                        else {
+                            VariableReferenceExpression counterpart = lookupVariable(argName.replaceFirst("(?i)^sum", "avg"), variables);
+                            if (counterpart != null) {
+                                argument = counterpart;
+                            }
+                        }
+                    }
+
+                    if (argument instanceof VariableReferenceExpression) {
+                        VariableReferenceExpression innerAvg = lookupVariableByFunctionAndColumn("avg", inside, variables);
+                        if (innerAvg != null) {
+                            argument = innerAvg;
+                        }
+                    }
+                }
+            }
             if (preferred != null) {
                 if (argument == null) {
                     argument = preferred;
@@ -3954,7 +4087,22 @@ public class OpengaussPlanAdapter
                     List<String> expressionTokens = extractExpressionTokens(inside);
                     boolean matchesPreferred = expressionTokens.stream().anyMatch(token -> preferredName.contains(token.toLowerCase(Locale.ENGLISH)) || token.toLowerCase(Locale.ENGLISH).contains(preferredName));
                     boolean matchesArgument = expressionTokens.stream().anyMatch(token -> argName.contains(token.toLowerCase(Locale.ENGLISH)) || token.toLowerCase(Locale.ENGLISH).contains(argName));
-                    if ((!matchesArgument && matchesPreferred) || argName.contains("sum") || (!argName.contains(keyword))) {
+                    if ("avg".equalsIgnoreCase(functionName)) {
+                        boolean argumentLooksLikeAvg = argName.contains("avg");
+                        boolean preferredLooksLikeAvg = preferredName.contains("avg");
+                        boolean argumentLooksLikeSum = argName.contains("sum");
+                        boolean preferredLooksLikeSum = preferredName.contains("sum");
+                        if (preferredLooksLikeAvg && !argumentLooksLikeAvg) {
+                            argument = preferred;
+                        }
+                        else if (argumentLooksLikeSum && !preferredLooksLikeSum) {
+                            argument = preferred;
+                        }
+                        else if ((!matchesArgument && matchesPreferred) || (!argumentLooksLikeAvg && argName.contains(keyword))) {
+                            argument = preferred;
+                        }
+                    }
+                    else if ((!matchesArgument && matchesPreferred) || argName.contains("sum") || (!argName.contains(keyword))) {
                         argument = preferred;
                     }
                 }

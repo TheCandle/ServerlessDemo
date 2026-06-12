@@ -5,6 +5,7 @@ run-query:
 		--schema tiny \
 		--output-format CSV \
 		-f true.sql > true.csv
+		 2> error.log
 
 	java -jar ../presto-cli/target/presto-cli-*-executable.jar \
 		--server 127.0.0.1:8082 \
@@ -21,7 +22,7 @@ run-query:
 	# 	--output-format CSV \
 	# 	--session max_drivers_per_task=1 \
 	# 	--session opengauss_debug_output_enabled=true \
-	# 	--session opengauss_debug_output_plan_node_id=4 \
+	# 	--session opengauss_debug_output_plan_node_id=5 \
 	# 	-f my.sql > my.csv
 
 	sort true.csv > output1.sorted

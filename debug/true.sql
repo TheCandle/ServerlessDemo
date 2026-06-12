@@ -1,13 +1,9 @@
 select
-	100.00 * sum(case
-		when p_type like 'PROMO%'
-			then l_extendedprice * (1 - l_discount)
-		else 0
-	end) / sum(l_extendedprice * (1 - l_discount)) as promo_revenue
+	sum(l_extendedprice * l_discount) as revenue
 from
-	lineitem,
-	part
+	lineitem
 where
-	l_partkey = p_partkey
-	and l_shipdate >= date '1995-02-01'
-	and l_shipdate < date '1995-02-01' + interval '1' month;
+	l_shipdate >= date '1997-01-01'
+	and l_shipdate < date '1997-01-01' + interval '1' year
+	and l_discount between 0.04 - 0.01 and 0.04 + 0.01
+	and l_quantity < 25;
