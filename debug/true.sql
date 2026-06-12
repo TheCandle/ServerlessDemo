@@ -1,27 +1,20 @@
 select
-	ps_partkey,
-	sum(ps_supplycost * ps_availqty) as value
+	c_count,
+	count(*) as custdist
 from
-	partsupp,
-	supplier,
-	nation
-where
-	ps_suppkey = s_suppkey
-	and s_nationkey = n_nationkey
-	and n_name = 'PERU'
+	(
+		select
+			c_custkey,
+			count(o_orderkey)
+		from
+			customer left outer join orders on
+				c_custkey = o_custkey
+				and o_comment not like '%unusual%requests%'
+		group by
+			c_custkey
+	) as c_orders (c_custkey, c_count)
 group by
-	ps_partkey having
-		sum(ps_supplycost * ps_availqty) > (
-			select
-				sum(ps_supplycost * ps_availqty) * 0.0000010000
-			from
-				partsupp,
-				supplier,
-				nation
-			where
-				ps_suppkey = s_suppkey
-				and s_nationkey = n_nationkey
-				and n_name = 'PERU'
-		)
+	c_count
 order by
-	value desc;
+	custdist desc,
+	c_count desc;

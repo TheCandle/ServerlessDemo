@@ -91,6 +91,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.HashSet;
 import java.util.regex.Pattern;
 
 public class OpengaussPlanAdapter
@@ -509,8 +511,33 @@ public class OpengaussPlanAdapter
         PlanNode source = translateNode(child, context, scalarBindings);
         String alias = firstNonNull(text(node, "Alias"), text(node, "Subplan Name"), "subquery");
         List<VariableReferenceExpression> sourceOutputs = source.getOutputVariables();
+        List<String> declaredOutputs = parseOutputNames(node);
+        Map<String, VariableReferenceExpression> sourceVariables = buildVariablesByOutput(source);
         Map<VariableReferenceExpression, RowExpression> assignments = new LinkedHashMap<>();
         List<VariableReferenceExpression> outputs = new ArrayList<>();
+
+        if (!declaredOutputs.isEmpty()) {
+            Set<VariableReferenceExpression> usedSources = new HashSet<>();
+            for (int i = 0; i < declaredOutputs.size(); i++) {
+                String outputName = declaredOutputs.get(i);
+                VariableReferenceExpression src = selectSubqueryOutputSource(outputName, sourceOutputs, sourceVariables, usedSources, i);
+                if (src == null) {
+                    continue;
+                }
+                usedSources.add(src);
+                VariableReferenceExpression target = context.getVariableAllocator().newVariable(simpleName(outputName), src.getType());
+                outputs.add(target);
+                assignments.put(target, src);
+                System.out.println("[OpengaussPlanAdapter] subquery output alias=" + alias
+                        + " outputName=" + outputName
+                        + " source=" + src
+                        + " sourceOutputs=" + sourceOutputs);
+            }
+            if (!assignments.isEmpty()) {
+                return new ProjectNode(Optional.empty(), context.getIdAllocator().getNextId(), source, Assignments.copyOf(assignments), ProjectNode.Locality.LOCAL);
+            }
+        }
+
         for (int i = 0; i < sourceOutputs.size(); i++) {
             VariableReferenceExpression src = sourceOutputs.get(i);
             String name = i == 0 ? "?column?" : src.getName();
@@ -519,6 +546,65 @@ public class OpengaussPlanAdapter
             assignments.put(target, src);
         }
         return new ProjectNode(Optional.empty(), context.getIdAllocator().getNextId(), source, Assignments.copyOf(assignments), ProjectNode.Locality.LOCAL);
+    }
+
+    private VariableReferenceExpression selectSubqueryOutputSource(String outputName, List<VariableReferenceExpression> sourceOutputs, Map<String, VariableReferenceExpression> sourceVariables, Set<VariableReferenceExpression> usedSources, int ordinal)
+    {
+        VariableReferenceExpression direct = lookupVariable(outputName, sourceVariables);
+        if (direct != null && (usedSources == null || !usedSources.contains(direct))) {
+            return direct;
+        }
+
+        String simple = simpleName(outputName).toLowerCase(Locale.ENGLISH);
+        String baseSimple = stripVariableIdSuffix(simple);
+        VariableReferenceExpression best = null;
+        int bestScore = Integer.MIN_VALUE;
+        for (VariableReferenceExpression candidate : sourceOutputs) {
+            if (candidate == null || (usedSources != null && usedSources.contains(candidate))) {
+                continue;
+            }
+            String candidateName = candidate.getName() == null ? "" : candidate.getName().toLowerCase(Locale.ENGLISH);
+            String candidateBase = stripVariableIdSuffix(simpleName(candidateName).toLowerCase(Locale.ENGLISH));
+            int score = 0;
+            if (candidateName.equals(simple) || candidateBase.equals(baseSimple)) {
+                score += 100;
+            }
+            if (candidateName.contains(simple) || simple.contains(candidateName) || candidateBase.contains(baseSimple) || baseSimple.contains(candidateBase)) {
+                score += 40;
+            }
+            if (baseSimple.contains("count") && candidateName.contains("count")) {
+                score += 80;
+            }
+            if (baseSimple.contains("sum") && candidateName.contains("sum")) {
+                score += 80;
+            }
+            if (baseSimple.contains("avg") && candidateName.contains("avg")) {
+                score += 80;
+            }
+            if (baseSimple.contains("min") && candidateName.contains("min")) {
+                score += 80;
+            }
+            if (baseSimple.contains("max") && candidateName.contains("max")) {
+                score += 80;
+            }
+            if (baseSimple.endsWith("key") && candidateBase.endsWith("key")) {
+                score += 20;
+            }
+            if (score > bestScore) {
+                bestScore = score;
+                best = candidate;
+            }
+        }
+        if (best != null && bestScore > 0) {
+            return best;
+        }
+        if (ordinal >= 0 && ordinal < sourceOutputs.size()) {
+            VariableReferenceExpression ordinalSource = sourceOutputs.get(ordinal);
+            if (usedSources == null || !usedSources.contains(ordinalSource)) {
+                return ordinalSource;
+            }
+        }
+        return null;
     }
 
     private PlanNode buildExchange(JsonNode node, AdapterContext context, Map<String, VariableReferenceExpression> scalarBindings)
@@ -628,6 +714,12 @@ public class OpengaussPlanAdapter
                 RowExpression expression = exprText == null ? null : parseProjectExpression(exprText, variables, context);
                 if (expression == null) {
                     expression = parseValue(firstNonNull(outputName, exprText), variables);
+                }
+                if (expression == null) {
+                    expression = lookupVariableByExpressionShape(firstNonNull(outputName, exprText), variables);
+                }
+                if (expression == null) {
+                    expression = selectBestMatchingVariable(variables, firstNonNull(outputName, exprText), "count");
                 }
                 if (expression == null) {
                     expression = new ConstantExpression(null, VarcharType.VARCHAR);
@@ -4191,6 +4283,12 @@ public class OpengaussPlanAdapter
         }
         if (argument instanceof ConstantExpression && argument.getType() instanceof VarcharType && containsAggregationFunction(inside.toLowerCase(Locale.ENGLISH))) {
             return null;
+        }
+        if (argument instanceof ConstantExpression && ((ConstantExpression) argument).getValue() == null) {
+            VariableReferenceExpression fallbackCount = selectBestMatchingVariable(variables, inside, "count");
+            if (fallbackCount != null && (functionName.equalsIgnoreCase("count") || functionName.equalsIgnoreCase("sum"))) {
+                argument = fallbackCount;
+            }
         }
         if (("avg".equalsIgnoreCase(functionName) || "sum".equalsIgnoreCase(functionName))) {
             if (!isNumericType(argument.getType())) {

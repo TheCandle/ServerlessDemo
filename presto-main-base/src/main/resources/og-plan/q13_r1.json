@@ -6,7 +6,7 @@
        "Total Cost": 654360.95,                                                                                    
        "Plan Rows": 200,                                                                                           
        "Plan Width": 16,                                                                                           
-       "Output": ["c_orders.c_count", "(pg_catalog.count(*))"],                                                    
+       "Output": ["c_orders.c_count", "(pg_catalog.sum(count(*)))"],                                                    
        "Plans": [                                                                                                  
          {                                                                                                         
            "Node Type": "Vector Sort",                                                                             
@@ -15,8 +15,8 @@
            "Total Cost": 654360.95,                                                                                
            "Plan Rows": 200,                                                                                       
            "Plan Width": 16,                                                                                       
-           "Output": ["c_orders.c_count", "(pg_catalog.count(*))"],                                                
-           "Sort Key": ["(pg_catalog.count(*)) DESC", "c_orders.c_count DESC"],                                    
+           "Output": ["c_orders.c_count", "(pg_catalog.sum(count(*)))"],                                                
+           "Sort Key": ["(pg_catalog.sum(count(*))) DESC", "c_orders.c_count DESC"],                                    
            "Plans": [                                                                                              
              {                                                                                                     
                "Node Type": "Vector Streaming(type: LOCAL GATHER dop: 1/64)",                                      
@@ -25,7 +25,7 @@
                "Total Cost": 654352.81,                                                                            
                "Plan Rows": 200,                                                                                   
                "Plan Width": 16,                                                                                   
-               "Output": ["c_orders.c_count", "(pg_catalog.count(*))"],                                            
+               "Output": ["c_orders.c_count", "pg_catalog.sum(count(*))"],                                            
                "Plans": [                                                                                          
                  {                                                                                                 
                    "Node Type": "Vector Sonic Hash Aggregate",                                                     
@@ -34,7 +34,7 @@
                    "Total Cost": 654352.29,                                                                        
                    "Plan Rows": 200,                                                                               
                    "Plan Width": 16,                                                                               
-                   "Output": ["c_orders.c_count", "pg_catalog.count(*)"],                                          
+                   "Output": ["c_orders.c_count", "pg_catalog.sum(count(*))"],                                          
                    "Group By Key": ["c_orders.c_count"],                                                           
                    "Plans": [                                                                                      
                      {                                                                                             
