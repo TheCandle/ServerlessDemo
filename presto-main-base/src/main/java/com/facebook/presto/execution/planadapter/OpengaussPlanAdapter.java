@@ -460,7 +460,8 @@ public class OpengaussPlanAdapter
                 RowExpression antiPredicate = new CallExpression("not", builtInUnaryHandle("not", BooleanType.BOOLEAN, semiOutput.getType()), BooleanType.BOOLEAN, List.of(semiOutput));
                 return new FilterNode(Optional.empty(), context.getIdAllocator().getNextId(), semiJoin, antiPredicate);
             }
-            return semiJoin;
+            RowExpression semiPredicate = semiOutput;
+            return new FilterNode(Optional.empty(), context.getIdAllocator().getNextId(), semiJoin, semiPredicate);
         }
 
         JoinType joinType = parseJoinType(joinTypeText);
@@ -752,6 +753,25 @@ public class OpengaussPlanAdapter
         }
 
         if (aggSpecs.isEmpty()) {
+            // OpenGauss uses Vector Sonic Hash Aggregate for both real aggregations
+            // and DISTINCT/GROUP BY-only stages.  For example TPC-H Q2 contains an
+            // aggregate with Output=[public.part.p_partkey] and Group By Key=[public.part.p_partkey].
+            // Treating that node as count(*) drops p_partkey from the output and later
+            // violates Presto's exchange partition layout validation.  If all declared
+            // outputs are plain column expressions, preserve them as grouping keys instead
+            // of inventing a fallback aggregate function.
+            for (Map.Entry<VariableReferenceExpression, RowExpression> entry : preProjectAssignments.entrySet()) {
+                RowExpression expression = entry.getValue();
+                if (expression instanceof VariableReferenceExpression) {
+                    VariableReferenceExpression variable = (VariableReferenceExpression) expression;
+                    if (!groupingKeys.contains(variable)) {
+                        groupingKeys.add(variable);
+                    }
+                }
+            }
+        }
+
+        if (aggSpecs.isEmpty() && groupingKeys.isEmpty()) {
             String functionName = inferAggregationFunction(text(node, "Node Type"));
             RowExpression fallbackArg = "count".equalsIgnoreCase(functionName) ? new ConstantExpression(1L, BigintType.BIGINT) : firstAggregationInput(functionName, source, node);
             aggOutputNames.add(functionName);
@@ -781,12 +801,8 @@ public class OpengaussPlanAdapter
                 + " preProjectOutputs=" + preProjectOutputs
                 + " aggDependencies=" + aggDependencyOutputs);
 
-        Map<VariableReferenceExpression, Aggregation> partialAggregations = new LinkedHashMap<>();
-        Map<VariableReferenceExpression, Aggregation> finalAggregations = new LinkedHashMap<>();
-        Map<VariableReferenceExpression, Aggregation> partialAggregations = new LinkedHashMap<>();
-        Map<VariableReferenceExpression, Aggregation> finalAggregations = new LinkedHashMap<>();
+        Map<VariableReferenceExpression, Aggregation> aggregations = new LinkedHashMap<>();
         List<VariableReferenceExpression> aggOutputs = new ArrayList<>();
-        List<VariableReferenceExpression> finalStageOutputs = new ArrayList<>();
         Map<VariableReferenceExpression, RowExpression> postAggregationAssignments = new LinkedHashMap<>();
         for (int i = 0; i < aggSpecs.size(); i++) {
             AggregationCallSpec spec = aggSpecs.get(i);
@@ -794,7 +810,7 @@ public class OpengaussPlanAdapter
             Type argumentType = spec.getArguments().isEmpty() ? null : spec.getArguments().get(0).getType();
             Type callReturnType = spec.getReturnType() == null ? inferAggregationReturnType(spec.getFunctionName(), argumentType) : spec.getReturnType();
             Type outputType = inferAggregationOutputType(spec.getFunctionName(), spec.getReturnType(), spec.getArguments());
-            VariableReferenceExpression partialOutput = context.getVariableAllocator().newVariable(outputName + "_partial", callReturnType);
+            VariableReferenceExpression aggregationOutput = context.getVariableAllocator().newVariable(outputName + "_raw", callReturnType);
             VariableReferenceExpression output = context.getVariableAllocator().newVariable(outputName, outputType);
             RowExpression argument = spec.getArguments().isEmpty() ? new ConstantExpression(1L, BigintType.BIGINT) : spec.getArguments().get(0);
             if (!isAggregationArgumentAllowed(argument)) {
@@ -803,18 +819,10 @@ public class OpengaussPlanAdapter
                 preProjectAssignments.put(projectedArgument, argument);
                 argument = projectedArgument;
             }
-            CallExpression partialCall = buildAggregationCall(context, spec.getFunctionName(), List.of(argument), callReturnType);
-            partialAggregations.put(partialOutput, new Aggregation(partialCall, Optional.empty(), Optional.empty(), false, Optional.empty()));
-            if ("count".equalsIgnoreCase(spec.getFunctionName())) {
-                CallExpression finalCall = buildAggregationCall(context, "sum", List.of(partialOutput), outputType);
-                finalAggregations.put(output, new Aggregation(finalCall, Optional.empty(), Optional.empty(), false, Optional.empty()));
-            }
-            else {
-                finalAggregations.put(output, new Aggregation(partialOutput, Optional.empty(), Optional.empty(), false, Optional.empty()));
-            }
-            postAggregationAssignments.put(output, output);
+            CallExpression callExpression = buildAggregationCall(context, spec.getFunctionName(), List.of(argument), callReturnType);
+            aggregations.put(aggregationOutput, new Aggregation(callExpression, Optional.empty(), Optional.empty(), false, Optional.empty()));
+            postAggregationAssignments.put(output, aggregationOutput);
             aggOutputs.add(output);
-            finalStageOutputs.add(output);
         }
 
         PlanNode current = source;
@@ -826,12 +834,11 @@ public class OpengaussPlanAdapter
             mergedPreProjectAssignments.putAll(preProjectAssignments);
             current = new ProjectNode(Optional.empty(), context.getIdAllocator().getNextId(), current, Assignments.copyOf(mergedPreProjectAssignments), ProjectNode.Locality.LOCAL);
         }
-        AggregationNode partialAggregation = new AggregationNode(Optional.empty(), context.getIdAllocator().getNextId(), current, partialAggregations, AggregationNode.singleGroupingSet(groupingKeys), Collections.emptyList(), AggregationNode.Step.PARTIAL, Optional.empty(), Optional.empty(), Optional.empty());
-        AggregationNode aggregation = new AggregationNode(Optional.empty(), context.getIdAllocator().getNextId(), partialAggregation, finalAggregations, AggregationNode.singleGroupingSet(groupingKeys), Collections.emptyList(), AggregationNode.Step.FINAL, Optional.empty(), Optional.empty(), Optional.empty());
+        AggregationNode aggregation = new AggregationNode(Optional.empty(), context.getIdAllocator().getNextId(), current, aggregations, AggregationNode.singleGroupingSet(groupingKeys), Collections.emptyList(), AggregationNode.Step.SINGLE, Optional.empty(), Optional.empty(), Optional.empty());
 
         List<VariableReferenceExpression> visibleOutputs = new ArrayList<>();
         visibleOutputs.addAll(preProjectOutputs);
-        visibleOutputs.addAll(finalStageOutputs);
+        visibleOutputs.addAll(aggOutputs);
         List<VariableReferenceExpression> finalOutputs = new ArrayList<>();
         Map<VariableReferenceExpression, RowExpression> projectAssignments = new LinkedHashMap<>();
 
@@ -844,7 +851,8 @@ public class OpengaussPlanAdapter
         for (VariableReferenceExpression v : aggOutputs) {
             if (!projectAssignments.containsKey(v)) {
                 finalOutputs.add(v);
-                projectAssignments.put(v, v);
+                RowExpression raw = postAggregationAssignments.get(v);
+                projectAssignments.put(v, raw == null ? v : raw);
             }
         }
 
@@ -2893,9 +2901,7 @@ public class OpengaussPlanAdapter
     {
         Map<String, VariableReferenceExpression> result = new LinkedHashMap<>();
         for (VariableReferenceExpression variable : node.getOutputVariables()) {
-            String name = variable.getName().toLowerCase(Locale.ENGLISH);
-            result.put(name, variable);
-            result.put(simpleName(name).toLowerCase(Locale.ENGLISH), variable);
+            addVariableLookupAliases(result, variable, false);
         }
         return result;
     }
@@ -2913,13 +2919,45 @@ public class OpengaussPlanAdapter
             return;
         }
         for (VariableReferenceExpression variable : node.getOutputVariables()) {
-            String name = variable.getName().toLowerCase(Locale.ENGLISH);
-            result.putIfAbsent(name, variable);
-            result.putIfAbsent(simpleName(name).toLowerCase(Locale.ENGLISH), variable);
+            addVariableLookupAliases(result, variable, true);
         }
         for (PlanNode source : node.getSources()) {
             collectVariablesByPlanTree(source, result);
         }
+    }
+
+    private void addVariableLookupAliases(Map<String, VariableReferenceExpression> result, VariableReferenceExpression variable, boolean keepExisting)
+    {
+        if (result == null || variable == null || variable.getName() == null) {
+            return;
+        }
+        String name = variable.getName().toLowerCase(Locale.ENGLISH);
+        String simple = simpleName(name).toLowerCase(Locale.ENGLISH);
+        String baseName = stripVariableIdSuffix(simple);
+        putVariableAlias(result, name, variable, keepExisting);
+        putVariableAlias(result, simple, variable, keepExisting);
+        putVariableAlias(result, baseName, variable, keepExisting);
+    }
+
+    private void putVariableAlias(Map<String, VariableReferenceExpression> result, String alias, VariableReferenceExpression variable, boolean keepExisting)
+    {
+        if (alias == null || alias.isBlank()) {
+            return;
+        }
+        if (keepExisting) {
+            result.putIfAbsent(alias, variable);
+        }
+        else {
+            result.put(alias, variable);
+        }
+    }
+
+    private String stripVariableIdSuffix(String name)
+    {
+        if (name == null) {
+            return "";
+        }
+        return name.replaceFirst("_\\d+$", "");
     }
 
     private VariableReferenceExpression lookupVariable(String token, Map<String, VariableReferenceExpression> variables)
@@ -3881,6 +3919,9 @@ public class OpengaussPlanAdapter
             }
             String variableName = variable.getName().toLowerCase(Locale.ENGLISH);
             int score = 0;
+            if (variableName.equals(lowerKeyword) || variableName.equals(lowerKeyword + "_") || variableName.startsWith(lowerKeyword + "__")) {
+                score += 20;
+            }
             if (variableName.contains(lowerKeyword)) {
                 score += 10;
             }
@@ -3996,6 +4037,26 @@ public class OpengaussPlanAdapter
         if ("count".equalsIgnoreCase(functionName) && ("*".equals(inside) || "1".equals(inside))) {
             return new AggregationCallSpec("count", inferAggregationSemanticNames(node, source), List.of(new ConstantExpression(1L, BigintType.BIGINT)), BigintType.BIGINT);
         }
+        if ("sum".equalsIgnoreCase(functionName) && ("count(*)".equalsIgnoreCase(inside) || "count(1)".equalsIgnoreCase(inside))) {
+            // sum(count(*)) is the two-phase aggregation pattern: the outer aggregate sums
+            // up the partial counts produced by each worker.  The argument must be the
+            // count variable from the partial aggregation stage (BIGINT), NOT any sum_*
+            // column.  Resolve it here and return immediately to avoid the generic
+            // preferred-variable selection logic below, which would otherwise replace
+            // the BIGINT count variable with a DOUBLE sum_* column.
+            VariableReferenceExpression countVariable = selectBestMatchingVariable(variables, "count", "count");
+            if (countVariable == null) {
+                countVariable = lookupVariable("count_", variables);
+            }
+            if (countVariable == null) {
+                countVariable = lookupVariable("count__raw", variables);
+            }
+            if (countVariable != null) {
+                System.out.println("[OpengaussPlanAdapter] parseAggregationFragment sum(count(*)) resolved countVariable=" + countVariable);
+                return new AggregationCallSpec("sum", inferAggregationSemanticNames(node, source), List.of(countVariable), BigintType.BIGINT);
+            }
+            // No partial count variable found – fall through to generic handling
+        }
         VariableReferenceExpression directInsideVariable = lookupVariable(inside, variables);
         if (directInsideVariable != null) {
             inside = directInsideVariable.getName();
@@ -4103,7 +4164,16 @@ public class OpengaussPlanAdapter
                         }
                     }
                     else if ((!matchesArgument && matchesPreferred) || argName.contains("sum") || (!argName.contains(keyword))) {
-                        argument = preferred;
+                        // Do NOT replace a count-derived variable (e.g. count_, count__raw) with a
+                        // preferred sum_* variable.  The pattern sum(count(*)) means "sum up the
+                        // partial counts from each worker", so the argument MUST be the count
+                        // variable produced by the partial aggregation, not any sum_ column.
+                        boolean argumentIsCountDerived = argName.contains("count")
+                                && argument instanceof VariableReferenceExpression
+                                && BigintType.BIGINT.equals(argument.getType());
+                        if (!argumentIsCountDerived) {
+                            argument = preferred;
+                        }
                     }
                 }
                 else if (argument instanceof ConstantExpression) {
@@ -4178,15 +4248,34 @@ public class OpengaussPlanAdapter
         }
 
         // If we are handed another aggregation call (for example, sum(sum(x)) or
-        // avg(avg(x))), peel it until we reach the real underlying argument. This
-        // avoids accidentally parsing the nested aggregate as a literal constant.
+        // avg(avg(x))), peel it until we reach the real underlying argument. For
+        // COUNT(*), the inner aggregate result should be the partial count column
+        // if it exists; otherwise fall back to a constant 1 for a raw count scan.
         if (isAggregationFunctionCall(normalized)) {
             int open = normalized.indexOf('(');
             int close = normalized.lastIndexOf(')');
             if (open >= 0 && close > open) {
+                String functionName = normalized.substring(0, open).trim().toLowerCase(Locale.ENGLISH);
+                if (functionName.startsWith("pg_catalog.")) {
+                    functionName = functionName.substring("pg_catalog.".length()).trim();
+                }
                 String nestedInside = normalized.substring(open + 1, close).trim();
                 while (nestedInside.startsWith("(") && nestedInside.endsWith(")") && matchingParens(nestedInside)) {
                     nestedInside = nestedInside.substring(1, nestedInside.length() - 1).trim();
+                }
+                if ("count".equals(functionName) && ("*".equals(nestedInside) || "1".equals(nestedInside))) {
+                    VariableReferenceExpression countVariable = selectBestMatchingVariable(variables, "count", "count");
+                    if (countVariable == null) {
+                        countVariable = lookupVariable("count_", variables);
+                    }
+                    if (countVariable != null) {
+                        return countVariable;
+                    }
+                    VariableReferenceExpression sumCountVariable = selectBestMatchingVariable(variables, "count", "sum");
+                    if (sumCountVariable != null) {
+                        return sumCountVariable;
+                    }
+                    return new ConstantExpression(1L, BigintType.BIGINT);
                 }
                 if (isAggregationFunctionCall(nestedInside) || nestedInside.toLowerCase(Locale.ENGLISH).startsWith("pg_catalog.")) {
                     return parseAggregationArgumentExpression(nestedInside, variables);
@@ -4302,11 +4391,11 @@ public class OpengaussPlanAdapter
 
     private String inferAggregationFunctionFromText(String lowerText)
     {
-        if (lowerText.contains("count(")) {
-            return "count";
-        }
         if (lowerText.contains("sum(")) {
             return "sum";
+        }
+        if (lowerText.contains("count(")) {
+            return "count";
         }
         if (lowerText.contains("avg(")) {
             return "avg";

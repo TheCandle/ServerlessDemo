@@ -6,7 +6,7 @@
        "Total Cost": 709899.03,                                                                                                                                                                                
        "Plan Rows": 1,                                                                                                                                                                                         
        "Plan Width": 24,                                                                                                                                                                                       
-       "Output": ["orders.o_orderpriority", "(pg_catalog.count(*))"],                                                                                                                                          
+       "Output": ["orders.o_orderpriority", "pg_catalog.sum(count(*))"],                                                                                                                                          
        "Plans": [                                                                                                                                                                                              
          {                                                                                                                                                                                                     
            "Node Type": "Vector Sort",                                                                                                                                                                         
@@ -15,7 +15,7 @@
            "Total Cost": 709899.03,                                                                                                                                                                            
            "Plan Rows": 1,                                                                                                                                                                                     
            "Plan Width": 24,                                                                                                                                                                                   
-           "Output": ["orders.o_orderpriority", "(pg_catalog.count(*))"],                                                                                                                                      
+           "Output": ["orders.o_orderpriority", "pg_catalog.sum(count(*))"],                                                                                                                                      
            "Sort Key": ["orders.o_orderpriority"],                                                                                                                                                             
            "Plans": [                                                                                                                                                                                          
              {                                                                                                                                                                                                 
@@ -25,7 +25,7 @@
                "Total Cost": 709899.01,                                                                                                                                                                        
                "Plan Rows": 1,                                                                                                                                                                                 
                "Plan Width": 24,                                                                                                                                                                               
-               "Output": ["orders.o_orderpriority", "(pg_catalog.count(*))"],                                                                                                                                  
+               "Output": ["orders.o_orderpriority", "pg_catalog.sum(count(*))"],                                                                                                                                  
                "Plans": [                                                                                                                                                                                      
                  {                                                                                                                                                                                             
                    "Node Type": "Vector Sonic Hash Aggregate",                                                                                                                                                 
@@ -34,7 +34,7 @@
                    "Total Cost": 709899.01,                                                                                                                                                                    
                    "Plan Rows": 1,                                                                                                                                                                             
                    "Plan Width": 24,                                                                                                                                                                           
-                   "Output": ["orders.o_orderpriority", "pg_catalog.count(*)"],                                                                                                                                
+                   "Output": ["orders.o_orderpriority", "pg_catalog.sum(count(*))"],                                                                                                                                
                    "Group By Key": ["orders.o_orderpriority"],                                                                                                                                                 
                    "Plans": [                                                                                                                                                                                  
                      {                                                                                                                                                                                         

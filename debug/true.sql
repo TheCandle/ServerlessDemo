@@ -1,9 +1,31 @@
 select
-	sum(l_extendedprice * l_discount) as revenue
+	c_custkey,
+	c_name,
+	sum(l_extendedprice * (1 - l_discount)) as revenue,
+	c_acctbal,
+	n_name,
+	c_address,
+	c_phone,
+	c_comment
 from
-	lineitem
+	customer,
+	orders,
+	lineitem,
+	nation
 where
-	l_shipdate >= date '1997-01-01'
-	and l_shipdate < date '1997-01-01' + interval '1' year
-	and l_discount between 0.04 - 0.01 and 0.04 + 0.01
-	and l_quantity < 25;
+	c_custkey = o_custkey
+	and l_orderkey = o_orderkey
+	and o_orderdate >= date '1994-03-01'
+	and o_orderdate < date '1994-03-01' + interval '3' month
+	and l_returnflag = 'R'
+	and c_nationkey = n_nationkey
+group by
+	c_custkey,
+	c_name,
+	c_acctbal,
+	c_phone,
+	n_name,
+	c_address,
+	c_comment
+order by
+	revenue desc;
