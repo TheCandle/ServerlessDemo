@@ -12,6 +12,7 @@ import com.facebook.presto.common.type.BooleanType;
 import com.facebook.presto.common.type.DateType;
 import com.facebook.presto.common.type.DecimalType;
 import com.facebook.presto.common.type.DoubleType;
+import com.facebook.presto.common.type.IntegerType;
 import com.facebook.presto.common.type.RealType;
 import com.facebook.presto.common.type.VarcharType;
 import com.facebook.presto.execution.QueryStateMachine;
@@ -100,6 +101,7 @@ public class OpengaussPlanAdapter
 {
     Metadata metadata;
     QueryStateMachine stateMachine;
+    private final Map<String, PlanNode> scalarPlanBindings = new LinkedHashMap<>();
     private  RowExpressionTranslator sqlToRowExpressionTranslator;
     public OpengaussPlanAdapter(Metadata metadata, QueryStateMachine stateMachine) {
         this.metadata = metadata;
@@ -140,6 +142,7 @@ public class OpengaussPlanAdapter
             }
             String json = new String(inputStream.readAllBytes(), StandardCharsets.UTF_8);
             JsonNode root = objectMapper.readTree(json);
+            scalarPlanBindings.clear();
             Map<String, VariableReferenceExpression> scalarBindings = new LinkedHashMap<>();
             JsonNode planRoot = unwrapPlan(root);
             PlanNode translated = translateNode(planRoot, context, scalarBindings);
@@ -190,6 +193,10 @@ public class OpengaussPlanAdapter
                         scalarBindings.put(("$" + bindingName).toLowerCase(Locale.ENGLISH), boundScalar);
                         scalarBindings.put("$" + bindingName, boundScalar);
                         scalarBindings.put(bindingName, boundScalar);
+                        scalarBindings.put(boundScalar.getName().toLowerCase(Locale.ENGLISH), boundScalar);
+                        scalarPlanBindings.put(bindingName.toLowerCase(Locale.ENGLISH), initPlan);
+                        scalarPlanBindings.put(("$" + bindingName).toLowerCase(Locale.ENGLISH), initPlan);
+                        scalarPlanBindings.put(boundScalar.getName().toLowerCase(Locale.ENGLISH), initPlan);
                         System.out.println("[OpengaussPlanAdapter] initPlan bind name=" + bindingName + " output=" + boundScalar + " outputs=" + outputs);
                     }
                 }
@@ -364,8 +371,9 @@ public class OpengaussPlanAdapter
                 variablesByName.put(columnName.toLowerCase(Locale.ENGLISH), variable);
             }
         }
-        for (VariableReferenceExpression boundScalar : scalarBindings.values()) {
-            variablesByName.put(boundScalar.getName().toLowerCase(Locale.ENGLISH), boundScalar);
+        for (Map.Entry<String, VariableReferenceExpression> scalarBinding : scalarBindings.entrySet()) {
+            variablesByName.put(scalarBinding.getKey().toLowerCase(Locale.ENGLISH), scalarBinding.getValue());
+            variablesByName.put(scalarBinding.getValue().getName().toLowerCase(Locale.ENGLISH), scalarBinding.getValue());
         }
 
         PlanNode scan = new TableScanNode(Optional.empty(), context.getIdAllocator().getNextId(), scanTableHandle, outputs, assignments, TupleDomain.all(), TupleDomain.all(), Optional.empty());
@@ -375,10 +383,51 @@ public class OpengaussPlanAdapter
         }
         if (predicate != null) {
             predicate = substituteScalarBindings(predicate, scalarBindings);
+            scan = attachScalarPlansForPredicate(scan, predicate, context);
             System.out.println("[OpengaussPlanAdapter] buildScan filter=" + filterText + " predicate=" + predicate + " scalarBindings=" + scalarBindings.keySet());
             scan = new FilterNode(Optional.empty(), context.getIdAllocator().getNextId(), scan, predicate);
         }
         return scan;
+    }
+
+    private PlanNode attachScalarPlansForPredicate(PlanNode source, RowExpression predicate, AdapterContext context)
+    {
+        if (source == null || predicate == null || scalarPlanBindings.isEmpty()) {
+            return source;
+        }
+        List<VariableReferenceExpression> dependencies = new ArrayList<>();
+        collectVariableDependencies(predicate, buildScalarVariableLookup(), dependencies);
+        PlanNode current = source;
+        for (VariableReferenceExpression dependency : dependencies) {
+            if (dependency == null || current.getOutputVariables().contains(dependency)) {
+                continue;
+            }
+            PlanNode scalarPlan = scalarPlanBindings.get(dependency.getName().toLowerCase(Locale.ENGLISH));
+            if (scalarPlan == null) {
+                continue;
+            }
+            List<VariableReferenceExpression> outputs = new ArrayList<>(current.getOutputVariables());
+            for (VariableReferenceExpression scalarOutput : scalarPlan.getOutputVariables()) {
+                if (!outputs.contains(scalarOutput)) {
+                    outputs.add(scalarOutput);
+                }
+            }
+            current = new JoinNode(Optional.empty(), context.getIdAllocator().getNextId(), JoinType.INNER, current, scalarPlan, Collections.emptyList(), outputs, Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty(), Collections.emptyMap());
+            System.out.println("[OpengaussPlanAdapter] attached scalar plan for dependency=" + dependency + " scalarOutputs=" + scalarPlan.getOutputVariables());
+        }
+        return current;
+    }
+
+    private Map<String, VariableReferenceExpression> buildScalarVariableLookup()
+    {
+        Map<String, VariableReferenceExpression> lookup = new LinkedHashMap<>();
+        for (Map.Entry<String, PlanNode> entry : scalarPlanBindings.entrySet()) {
+            for (VariableReferenceExpression variable : entry.getValue().getOutputVariables()) {
+                lookup.put(variable.getName().toLowerCase(Locale.ENGLISH), variable);
+                lookup.put(entry.getKey().toLowerCase(Locale.ENGLISH), variable);
+            }
+        }
+        return lookup;
     }
 
     private RowExpression parseTopLevelFilterConjuncts(String filterText, Map<String, VariableReferenceExpression> variables)
@@ -464,13 +513,33 @@ public class OpengaussPlanAdapter
             PlanNode preservedSide = translateNode(rightSidePreserved ? rightJson : leftJson, context, scalarBindings);
             PlanNode filteringSide = translateNode(rightSidePreserved ? leftJson : rightJson, context, scalarBindings);
             String joinCondition = firstNonNull(text(node, "Hash Cond"), text(node, "Merge Cond"), text(node, "Join Filter"));
-            VariableReferenceExpression sourceJoinVariable = resolveJoinVariable(preservedSide, joinCondition);
-            VariableReferenceExpression filteringJoinVariable = resolveJoinVariable(filteringSide, joinCondition);
-            if (sourceJoinVariable == null && !preservedSide.getOutputVariables().isEmpty()) {
-                sourceJoinVariable = preservedSide.getOutputVariables().get(0);
+            VariableReferenceExpression sourceJoinVariable = null;
+            VariableReferenceExpression filteringJoinVariable = null;
+            List<String> conditions = splitJoinConditions(joinCondition);
+            for (String condition : conditions) {
+                String[] parts = condition.split("=");
+                if (parts.length != 2) {
+                    continue;
+                }
+                VariableReferenceExpression preservedLeft = resolveJoinVariable(preservedSide, parts[0].trim());
+                VariableReferenceExpression preservedRight = resolveJoinVariable(preservedSide, parts[1].trim());
+                VariableReferenceExpression filteringLeft = resolveJoinVariable(filteringSide, parts[0].trim());
+                VariableReferenceExpression filteringRight = resolveJoinVariable(filteringSide, parts[1].trim());
+                if (preservedLeft != null && filteringRight != null) {
+                    sourceJoinVariable = preservedLeft;
+                    filteringJoinVariable = filteringRight;
+                    break;
+                }
+                if (preservedRight != null && filteringLeft != null) {
+                    sourceJoinVariable = preservedRight;
+                    filteringJoinVariable = filteringLeft;
+                    break;
+                }
             }
-            if (filteringJoinVariable == null && !filteringSide.getOutputVariables().isEmpty()) {
-                filteringJoinVariable = filteringSide.getOutputVariables().get(0);
+            if (sourceJoinVariable == null || filteringJoinVariable == null) {
+                throw new IllegalArgumentException("Unable to resolve semi/anti join variables for condition=" + joinCondition
+                        + " preservedOutputs=" + preservedSide.getOutputVariables()
+                        + " filteringOutputs=" + filteringSide.getOutputVariables());
             }
             if (sourceJoinVariable != null && filteringJoinVariable != null
                     && sourceJoinVariable.getType() != null
@@ -830,12 +899,40 @@ public class OpengaussPlanAdapter
         }
         for (String token : groupKeyTokens) {
             VariableReferenceExpression variable = lookupVariable(token, variables);
+            if (variable == null) {
+                Map<String, VariableReferenceExpression> groupExpressionVariables = buildVariablesByPlanTree(source);
+                for (VariableReferenceExpression sourceOutput : source.getOutputVariables()) {
+                    groupExpressionVariables.put(sourceOutput.getName().toLowerCase(Locale.ENGLISH), sourceOutput);
+                    groupExpressionVariables.put(simpleName(sourceOutput.getName()).toLowerCase(Locale.ENGLISH), sourceOutput);
+                }
+                RowExpression groupExpression = resolveDeclaredOutputExpression(token, groupExpressionVariables);
+                if (groupExpression instanceof VariableReferenceExpression) {
+                    variable = (VariableReferenceExpression) groupExpression;
+                }
+            }
+            if (variable == null) {
+                variable = findExpressionOutputVariable(token, source.getOutputVariables());
+            }
             if (variable != null && !groupingKeys.contains(variable)) {
                 groupingKeys.add(variable);
             }
         }
 
         List<String> outputNames = parseOutputNames(node);
+        if (groupingKeys.isEmpty()) {
+            boolean declaredSubstringGrouping = groupKeyTokens.stream().anyMatch(token -> token.toLowerCase(Locale.ENGLISH).contains("substring") || token.toLowerCase(Locale.ENGLISH).contains("substr"))
+                    || outputNames.stream().anyMatch(token -> token.toLowerCase(Locale.ENGLISH).contains("substring") || token.toLowerCase(Locale.ENGLISH).contains("substr"));
+            if (declaredSubstringGrouping) {
+                VariableReferenceExpression substringGrouping = findExpressionOutputVariable("substring", source.getOutputVariables());
+                if (substringGrouping != null) {
+                    System.out.println("[OpengaussPlanAdapter] aggregate inferred substring grouping key=" + substringGrouping
+                            + " groupKeyTokens=" + groupKeyTokens
+                            + " outputNames=" + outputNames
+                            + " sourceOutputs=" + source.getOutputVariables());
+                    groupingKeys.add(substringGrouping);
+                }
+            }
+        }
         System.out.println("[OpengaussPlanAdapter] aggregate source nodeType=" + text(node, "Node Type")
                 + " output=" + text(node, "Output")
                 + " parsedOutputNames=" + outputNames);
@@ -1149,6 +1246,7 @@ public class OpengaussPlanAdapter
 
     private PlanNode buildSort(JsonNode node, AdapterContext context, Map<String, VariableReferenceExpression> scalarBindings)
     {
+        bindInitPlans(node, context, scalarBindings);
         JsonNode child = primaryChild(node);
         if (child == null) {
             return buildFallbackProject(node, context);
@@ -1160,8 +1258,12 @@ public class OpengaussPlanAdapter
         if (sortKey != null) {
             for (String token : splitCommaSeparated(sortKey)) {
                 VariableReferenceExpression variable = lookupVariable(token, variables);
+                if (variable == null) {
+                    variable = findExpressionOutputVariable(token, source.getOutputVariables());
+                }
                 if (variable != null) {
-                    orderings.add(new Ordering(variable, SortOrder.ASC_NULLS_FIRST));
+                    SortOrder sortOrder = token.toLowerCase(Locale.ENGLISH).contains(" desc") ? SortOrder.DESC_NULLS_LAST : SortOrder.ASC_NULLS_FIRST;
+                    orderings.add(new Ordering(variable, sortOrder));
                 }
             }
         }
@@ -1382,6 +1484,25 @@ public class OpengaussPlanAdapter
 
         PlanNode projected = new ProjectNode(Optional.empty(), context.getIdAllocator().getNextId(), planNode, Assignments.copyOf(assignments), ProjectNode.Locality.LOCAL);
         return new OutputNode(Optional.empty(), context.getIdAllocator().getNextId(), projected, columnNames, finalOutputs);
+    }
+
+    private VariableReferenceExpression findExpressionOutputVariable(String expression, List<VariableReferenceExpression> outputs)
+    {
+        if (expression == null || outputs == null || outputs.isEmpty()) {
+            return null;
+        }
+        String normalized = canonicalizeExpressionText(expression).toLowerCase(Locale.ENGLISH);
+        boolean wantsSubstring = normalized.contains("substring") || normalized.contains("substr");
+        for (VariableReferenceExpression output : outputs) {
+            if (output == null || output.getName() == null) {
+                continue;
+            }
+            String name = output.getName().toLowerCase(Locale.ENGLISH);
+            if (wantsSubstring && (name.contains("substring") || name.contains("substr"))) {
+                return output;
+            }
+        }
+        return null;
     }
 
     private RowExpression resolveDeclaredOutputExpression(String outputName, Map<String, VariableReferenceExpression> variables)
@@ -3138,6 +3259,14 @@ public class OpengaussPlanAdapter
             return result;
         }
         if (normalized.startsWith("$")) {
+            VariableReferenceExpression bound = lookupVariable(normalized, variables);
+            if (bound == null) {
+                bound = lookupVariable(normalized.substring(1), variables);
+            }
+            if (bound != null) {
+                System.out.println("[OpengaussPlanAdapter] parseValue param normalized=" + normalized + " -> " + bound + " type=" + bound.getType());
+                return bound;
+            }
             RowExpression result = varcharConstant(normalized);
             System.out.println("[OpengaussPlanAdapter] parseValue param normalized=" + normalized + " -> " + result + " type=" + result.getType());
             return result;
@@ -3676,6 +3805,38 @@ public class OpengaussPlanAdapter
         return children.isEmpty() ? null : children.get(0);
     }
 
+    private void bindInitPlans(JsonNode node, AdapterContext context, Map<String, VariableReferenceExpression> scalarBindings)
+    {
+        if (node == null || scalarBindings == null) {
+            return;
+        }
+        for (JsonNode child : children(node)) {
+            String rel = text(child, "Parent Relationship");
+            if (rel == null || !rel.equalsIgnoreCase("InitPlan")) {
+                continue;
+            }
+            PlanNode initPlan = translateNode(firstChild(child) == null ? child : firstChild(child), context, scalarBindings);
+            List<VariableReferenceExpression> outputs = initPlan.getOutputVariables();
+            if (outputs.isEmpty()) {
+                continue;
+            }
+            String subplanName = text(child, "Subplan Name");
+            String bindingName = subplanName != null && subplanName.contains("$")
+                    ? subplanName.substring(subplanName.indexOf('$') + 1).replaceAll("[^0-9A-Za-z_]+", "")
+                    : String.valueOf(scalarBindings.size());
+            VariableReferenceExpression boundScalar = outputs.get(0);
+            scalarBindings.put(bindingName.toLowerCase(Locale.ENGLISH), boundScalar);
+            scalarBindings.put(("$" + bindingName).toLowerCase(Locale.ENGLISH), boundScalar);
+            scalarBindings.put("$" + bindingName, boundScalar);
+            scalarBindings.put(bindingName, boundScalar);
+            scalarBindings.put(boundScalar.getName().toLowerCase(Locale.ENGLISH), boundScalar);
+            scalarPlanBindings.put(bindingName.toLowerCase(Locale.ENGLISH), initPlan);
+            scalarPlanBindings.put(("$" + bindingName).toLowerCase(Locale.ENGLISH), initPlan);
+            scalarPlanBindings.put(boundScalar.getName().toLowerCase(Locale.ENGLISH), initPlan);
+            System.out.println("[OpengaussPlanAdapter] bindInitPlans name=" + bindingName + " output=" + boundScalar + " outputs=" + outputs);
+        }
+    }
+
     private JsonNode primaryChild(JsonNode node)
     {
         List<JsonNode> children = children(node);
@@ -3935,7 +4096,27 @@ public class OpengaussPlanAdapter
                 args.add(arg);
             }
         }
-        return new CallExpression("substring", new PassthroughFunctionHandle("substring"), VarcharType.VARCHAR, args);
+        List<RowExpression> normalizedArgs = new ArrayList<>();
+        for (int i = 0; i < args.size(); i++) {
+            RowExpression arg = args.get(i);
+            if (i > 0 && arg instanceof ConstantExpression && arg.getType() instanceof BigintType) {
+                Object value = ((ConstantExpression) arg).getValue();
+                if (value instanceof Number) {
+                    arg = new ConstantExpression(((Number) value).longValue(), IntegerType.INTEGER);
+                }
+            }
+            normalizedArgs.add(arg);
+        }
+        List<TypeSignatureProvider> parameterTypes = new ArrayList<>();
+        for (RowExpression arg : normalizedArgs) {
+            parameterTypes.addAll(TypeSignatureProvider.fromTypes(arg.getType()));
+        }
+        com.facebook.presto.spi.function.FunctionHandle functionHandle = metadata.getFunctionAndTypeManager().resolveFunction(
+                Optional.empty(),
+                Optional.empty(),
+                new QualifiedObjectName("presto", "default", "substr"),
+                parameterTypes);
+        return new CallExpression("substr", functionHandle, VarcharType.VARCHAR, normalizedArgs);
     }
 
     private RowExpression parseCanonicalSubstringArgument(String argument, Map<String, VariableReferenceExpression> variables)
