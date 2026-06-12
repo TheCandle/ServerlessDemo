@@ -4618,6 +4618,15 @@ public class OpengaussPlanAdapter
                     return new ConstantExpression(Double.valueOf(text), DoubleType.DOUBLE);
                 }
             }
+            if (!DoubleType.DOUBLE.equals(operand.getType())) {
+                try {
+                    com.facebook.presto.spi.function.FunctionHandle castHandle = metadata.getFunctionAndTypeManager().lookupCast(CastType.CAST, operand.getType(), DoubleType.DOUBLE);
+                    return new CallExpression("$operator$cast", castHandle, DoubleType.DOUBLE, List.of(operand));
+                }
+                catch (RuntimeException e) {
+                    System.out.println("[OpengaussPlanAdapter] failed to cast arithmetic operand to DOUBLE operand=" + operand + " type=" + operand.getType() + " reason=" + e.getMessage());
+                }
+            }
             return operand;
         }
         if (targetType instanceof BigintType) {
