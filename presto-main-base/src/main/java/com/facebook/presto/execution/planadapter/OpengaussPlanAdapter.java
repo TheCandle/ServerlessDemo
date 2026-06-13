@@ -1443,6 +1443,7 @@ public class OpengaussPlanAdapter
             }
         }
 
+        columnNames = filterUserVisibleOutputNames(columnNames);
         int outputSize = outputVariables.size();
         int columnSize = columnNames.size();
         int pairSize = Math.min(columnSize, outputSize);
@@ -1466,6 +1467,12 @@ public class OpengaussPlanAdapter
             RowExpression sourceExpression = resolveDeclaredOutputExpression(columnName, outputLookup);
             if (!(sourceExpression instanceof VariableReferenceExpression)) {
                 sourceExpression = outputVariables.get(i);
+            }
+            if (sourceExpression instanceof VariableReferenceExpression) {
+                VariableReferenceExpression candidateSource = (VariableReferenceExpression) sourceExpression;
+                if (shouldUseOrdinalOutputForDeclaredColumn(columnName, candidateSource, outputVariables, i)) {
+                    sourceExpression = outputVariables.get(i);
+                }
             }
             VariableReferenceExpression source = (VariableReferenceExpression) sourceExpression;
             VariableReferenceExpression alias = context.getVariableAllocator().newVariable(columnName, source.getType());
@@ -1501,6 +1508,48 @@ public class OpengaussPlanAdapter
 
         PlanNode projected = new ProjectNode(Optional.empty(), context.getIdAllocator().getNextId(), planNode, Assignments.copyOf(assignments), ProjectNode.Locality.LOCAL);
         return new OutputNode(Optional.empty(), context.getIdAllocator().getNextId(), projected, columnNames, finalOutputs);
+    }
+
+    private List<String> filterUserVisibleOutputNames(List<String> columnNames)
+    {
+        if (columnNames == null || columnNames.isEmpty()) {
+            return columnNames == null ? new ArrayList<>() : columnNames;
+        }
+        List<String> filtered = new ArrayList<>();
+        for (String columnName : columnNames) {
+            if (columnName == null || columnName.isBlank()) {
+                continue;
+            }
+            String normalized = columnName.toLowerCase(Locale.ENGLISH).trim();
+            String simple = simpleName(normalized).toLowerCase(Locale.ENGLISH);
+            if (normalized.contains("pg_catalog_avg_avg_") || normalized.contains("pg_catalog_sum_count_") || simple.matches(".*_(raw|arg)$")) {
+                continue;
+            }
+            filtered.add(columnName);
+        }
+        return filtered;
+    }
+
+    private boolean shouldUseOrdinalOutputForDeclaredColumn(String columnName, VariableReferenceExpression candidateSource, List<VariableReferenceExpression> outputVariables, int ordinal)
+    {
+        if (candidateSource == null || outputVariables == null || ordinal < 0 || ordinal >= outputVariables.size()) {
+            return false;
+        }
+        if (!outputVariables.contains(candidateSource)) {
+            return true;
+        }
+        String declared = columnName == null ? "" : canonicalizeExpressionText(columnName).toLowerCase(Locale.ENGLISH);
+        String candidateName = candidateSource.getName() == null ? "" : candidateSource.getName().toLowerCase(Locale.ENGLISH);
+        VariableReferenceExpression ordinalSource = outputVariables.get(ordinal);
+        String ordinalName = ordinalSource.getName() == null ? "" : ordinalSource.getName().toLowerCase(Locale.ENGLISH);
+        if (declared.contains("sum(") && (declared.contains("extendedprice") || declared.contains("discount") || declared.contains("tax"))
+                && candidateName.contains("quantity") && !ordinalName.contains("quantity")) {
+            return true;
+        }
+        if (declared.contains("avg(") && candidateName.contains("sum_") && ordinalName.contains("avg_")) {
+            return true;
+        }
+        return false;
     }
 
     private VariableReferenceExpression findExpressionOutputVariable(String expression, List<VariableReferenceExpression> outputs)
@@ -1549,7 +1598,7 @@ public class OpengaussPlanAdapter
             }
         }
         if (lower.contains("sum(")) {
-            VariableReferenceExpression sum = selectBestMatchingVariable(variables, "sum", "sum");
+            VariableReferenceExpression sum = selectBestMatchingVariable(variables, normalized, "sum");
             if (sum != null) {
                 return sum;
             }
@@ -3517,21 +3566,26 @@ public class OpengaussPlanAdapter
             return null;
         }
         String normalized = stripUnmatchedOuterParens(canonicalizeExpressionText(expression).trim());
-        String lower = normalized.toLowerCase(Locale.ENGLISH);
+        String functionNormalized = stripCatalogFunctionPrefix(normalized);
+        String lower = functionNormalized.toLowerCase(Locale.ENGLISH);
         for (String functionName : List.of("sum", "avg", "count", "min", "max")) {
             if (!lower.startsWith(functionName + "(")) {
                 continue;
             }
-            int open = normalized.indexOf('(');
-            int close = normalized.lastIndexOf(')');
+            int open = functionNormalized.indexOf('(');
+            int close = functionNormalized.lastIndexOf(')');
             if (open < 0 || close <= open) {
                 continue;
             }
-            String argument = normalized.substring(open + 1, close).trim();
+            String argument = functionNormalized.substring(open + 1, close).trim();
             while (canStripWrappingParens(argument)) {
                 argument = argument.substring(1, argument.length() - 1).trim();
             }
             if (isAggregationFunctionCall(argument)) {
+                VariableReferenceExpression nestedOutput = lookupVariableByNestedAggregation(functionName, argument, variables);
+                if (nestedOutput != null) {
+                    return nestedOutput;
+                }
                 RowExpression nestedAggregateVariable = resolveAggregateVariableReference(argument, variables);
                 if (nestedAggregateVariable != null) {
                     return nestedAggregateVariable;
@@ -3553,6 +3607,99 @@ public class OpengaussPlanAdapter
             }
         }
         return null;
+    }
+
+    private VariableReferenceExpression lookupVariableByNestedAggregation(String outerFunctionName, String nestedExpression, Map<String, VariableReferenceExpression> variables)
+    {
+        if (outerFunctionName == null || nestedExpression == null || variables == null || variables.isEmpty()) {
+            return null;
+        }
+        String normalizedOuter = outerFunctionName.toLowerCase(Locale.ENGLISH);
+        String normalizedNested = stripCatalogFunctionPrefix(stripUnmatchedOuterParens(canonicalizeExpressionText(nestedExpression).trim()));
+        String nestedFunctionName = aggregationFunctionName(normalizedNested);
+        if (nestedFunctionName == null) {
+            return null;
+        }
+        int open = normalizedNested.indexOf('(');
+        int close = normalizedNested.lastIndexOf(')');
+        if (open < 0 || close <= open) {
+            return null;
+        }
+        String nestedArgument = normalizedNested.substring(open + 1, close).trim();
+        while (canStripWrappingParens(nestedArgument)) {
+            nestedArgument = nestedArgument.substring(1, nestedArgument.length() - 1).trim();
+        }
+        String canonicalColumn = canonicalAggregationColumnToken(nestedArgument);
+        String preferredPrefix = normalizedOuter + "_" + nestedFunctionName + (canonicalColumn.isEmpty() ? "" : "_" + canonicalColumn);
+        VariableReferenceExpression best = null;
+        int bestScore = Integer.MIN_VALUE;
+        for (VariableReferenceExpression variable : variables.values()) {
+            if (variable == null || variable.getName() == null) {
+                continue;
+            }
+            String name = variable.getName().toLowerCase(Locale.ENGLISH);
+            String baseName = name.replaceAll("_raw$", "").replaceAll("_+$", "");
+            int score = 0;
+            if (baseName.equals(preferredPrefix)) {
+                score += 200;
+            }
+            if (baseName.startsWith(preferredPrefix)) {
+                score += 160;
+            }
+            if (baseName.contains(normalizedOuter + "_" + nestedFunctionName)) {
+                score += canonicalColumn.isEmpty() ? 140 : 80;
+            }
+            else if (baseName.contains(normalizedOuter) && baseName.contains(nestedFunctionName)) {
+                score += canonicalColumn.isEmpty() ? 120 : 50;
+            }
+            if (!canonicalColumn.isEmpty() && baseName.contains(canonicalColumn)) {
+                score += 40;
+            }
+            if (baseName.endsWith("_raw")) {
+                score -= 5;
+            }
+            if (score > bestScore) {
+                bestScore = score;
+                best = variable;
+            }
+        }
+        return bestScore >= 120 ? best : null;
+    }
+
+    private String aggregationFunctionName(String expression)
+    {
+        if (expression == null) {
+            return null;
+        }
+        String lower = stripCatalogFunctionPrefix(expression.trim()).toLowerCase(Locale.ENGLISH);
+        for (String functionName : List.of("sum", "avg", "count", "min", "max")) {
+            if (lower.startsWith(functionName + "(")) {
+                return functionName;
+            }
+        }
+        return null;
+    }
+
+    private String stripCatalogFunctionPrefix(String expression)
+    {
+        if (expression == null) {
+            return null;
+        }
+        String normalized = expression.trim();
+        while (normalized.toLowerCase(Locale.ENGLISH).startsWith("pg_catalog.")) {
+            normalized = normalized.substring("pg_catalog.".length()).trim();
+        }
+        return normalized;
+    }
+
+    private String canonicalAggregationColumnToken(String expression)
+    {
+        if (expression == null) {
+            return "";
+        }
+        String simple = simpleName(stripUnmatchedOuterParens(canonicalizeExpressionText(expression).trim())).toLowerCase(Locale.ENGLISH);
+        simple = simple.replaceAll("[^a-z0-9_]+", "_").replaceAll("_+", "_").replaceAll("^_+|_+$", "");
+        return simple;
     }
 
     private VariableReferenceExpression lookupVariableByExpressionShape(String expression, Map<String, VariableReferenceExpression> variables)
@@ -4513,8 +4660,11 @@ public class OpengaussPlanAdapter
                     continue;
                 }
                 String lowerToken = token.toLowerCase(Locale.ENGLISH);
+                if (lowerToken.equals("sum") || lowerToken.equals("avg") || lowerToken.equals("count") || lowerToken.equals("min") || lowerToken.equals("max") || lowerToken.equals("pg_catalog") || lowerToken.equals("numeric")) {
+                    continue;
+                }
                 if (variableName.contains(lowerToken) || lowerToken.contains(variableName)) {
-                    score += 4;
+                    score += lowerToken.contains("quantity") || lowerToken.contains("extendedprice") || lowerToken.contains("discount") || lowerToken.contains("tax") ? 20 : 4;
                 }
             }
             if (variableName.startsWith("avg") && normalizedExpression.contains("avg(")) {

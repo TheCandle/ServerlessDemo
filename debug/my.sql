@@ -1,1 +1,1 @@
-select 22;
+select 1;

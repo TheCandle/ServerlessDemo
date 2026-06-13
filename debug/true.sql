@@ -1,37 +1,7 @@
-select
-	cntrycode,
-	count(*) as numcust,
-	sum(c_acctbal) as totacctbal
-from
-	(
-		select
-			substring(c_phone from 1 for 2) as cntrycode,
-			c_acctbal
-		from
-			customer
-		where
-			substring(c_phone from 1 for 2) in
-				('22', '40', '39', '23', '27', '20', '34')
-			and c_acctbal > (
-				select
-					avg(c_acctbal)
-				from
-					customer
-				where
-					c_acctbal > 0.00
-					and substring(c_phone from 1 for 2) in
-						('22', '40', '39', '23', '27', '20', '34')
-			)
-			and not exists (
-				select
-					*
-				from
-					orders
-				where
-					o_custkey = c_custkey
-			)
-	) as custsale
-group by
-	cntrycode
-order by
-	cntrycode;
+select l_returnflag, l_linestatus, sum(l_quantity), sum(l_extendedprice), sum(l_extendedprice * (1 - l_discount)), sum(l_extendedprice * (1 - l_discount) * (1 + l_tax)), avg(l_quantity) as avg_qty,
+	avg(l_extendedprice) as avg_price,
+	avg(l_discount) as avg_disc,
+	count(*) as count_order
+ from tpchstandard.tiny.lineitem where
+	l_shipdate <= date '1998-12-01' - interval '63' day
+	group by l_returnflag, l_linestatus;
