@@ -406,6 +406,7 @@ public class OpengaussPlanAdapter
             if (scalarPlan == null) {
                 continue;
             }
+            scalarPlan = ensureReplicatedExchange(scalarPlan, context);
             List<VariableReferenceExpression> outputs = new ArrayList<>(current.getOutputVariables());
             for (VariableReferenceExpression scalarOutput : scalarPlan.getOutputVariables()) {
                 if (!outputs.contains(scalarOutput)) {
@@ -994,6 +995,22 @@ public class OpengaussPlanAdapter
             dependencyLookup.put(outputName.toLowerCase(Locale.ENGLISH), projected);
         }
 
+        if (!aggSpecs.isEmpty()) {
+            for (Map.Entry<VariableReferenceExpression, RowExpression> entry : preProjectAssignments.entrySet()) {
+                VariableReferenceExpression projectedOutput = entry.getKey();
+                RowExpression expression = entry.getValue();
+                boolean groupingExpression = expression instanceof VariableReferenceExpression
+                        || projectedOutput.getName().toLowerCase(Locale.ENGLISH).contains("substring")
+                        || projectedOutput.getName().toLowerCase(Locale.ENGLISH).contains("substr");
+                if (groupingExpression && !groupingKeys.contains(projectedOutput)) {
+                    groupingKeys.add(projectedOutput);
+                    System.out.println("[OpengaussPlanAdapter] aggregate added non-aggregate output as grouping key=" + projectedOutput
+                            + " expression=" + expression
+                            + " outputNames=" + outputNames);
+                }
+            }
+        }
+
         for (VariableReferenceExpression dependency : aggDependencyOutputs) {
             boolean exists = false;
             for (VariableReferenceExpression existing : preProjectOutputs) {
@@ -1523,6 +1540,19 @@ public class OpengaussPlanAdapter
         RowExpression aggregate = resolveAggregateVariableReference(normalized, variables);
         if (aggregate != null) {
             return aggregate;
+        }
+        String lower = normalized.toLowerCase(Locale.ENGLISH);
+        if (lower.contains("count(")) {
+            VariableReferenceExpression count = selectBestMatchingVariable(variables, "count", "count");
+            if (count != null) {
+                return count;
+            }
+        }
+        if (lower.contains("sum(")) {
+            VariableReferenceExpression sum = selectBestMatchingVariable(variables, "sum", "sum");
+            if (sum != null) {
+                return sum;
+            }
         }
         return lookupVariableByExpressionShape(normalized, variables);
     }

@@ -1,37 +1,37 @@
 select
-	s_name,
-	s_address
+	cntrycode,
+	count(*) as numcust,
+	sum(c_acctbal) as totacctbal
 from
-	supplier,
-	nation
-where
-	s_suppkey in (
+	(
 		select
-			ps_suppkey
+			substring(c_phone from 1 for 2) as cntrycode,
+			c_acctbal
 		from
-			partsupp
+			customer
 		where
-			ps_partkey in (
+			substring(c_phone from 1 for 2) in
+				('22', '40', '39', '23', '27', '20', '34')
+			and c_acctbal > (
 				select
-					p_partkey
+					avg(c_acctbal)
 				from
-					part
+					customer
 				where
-					p_name like 'cyan%'
+					c_acctbal > 0.00
+					and substring(c_phone from 1 for 2) in
+						('22', '40', '39', '23', '27', '20', '34')
 			)
-			and ps_availqty > (
+			and not exists (
 				select
-					0.5 * sum(l_quantity)
+					*
 				from
-					lineitem
+					orders
 				where
-					l_partkey = ps_partkey
-					and l_suppkey = ps_suppkey
-					and l_shipdate >= date '1997-01-01'
-					and l_shipdate < date '1997-01-01' + interval '1' year
+					o_custkey = c_custkey
 			)
-	)
-	and s_nationkey = n_nationkey
-	and n_name = 'BRAZIL'
+	) as custsale
+group by
+	cntrycode
 order by
-	s_name;
+	cntrycode;
