@@ -7,3 +7,6 @@ opengauss_debug_output_plan_node_id  目标 PlanNodeId
 
 
 q11 q18 -> 对having的支持
+
+
+q2: 224行错误

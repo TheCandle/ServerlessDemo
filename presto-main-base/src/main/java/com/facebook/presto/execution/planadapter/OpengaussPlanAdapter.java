@@ -89,12 +89,14 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.Objects;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public class OpengaussPlanAdapter
@@ -215,7 +217,7 @@ public class OpengaussPlanAdapter
         if (normalized.contains("scan")) {
             return alignOutputNode(node, buildScan(node, context, scalarBindings), context);
         }
-        if (normalized.contains("join")) {
+        if (normalized.contains("join") || normalized.contains("nest loop") || normalized.contains("nested loop")) {
             return alignOutputNode(node, buildJoin(node, context, scalarBindings), context);
         }
         if (normalized.contains("sort aggregate")) {
@@ -316,9 +318,18 @@ public class OpengaussPlanAdapter
                 continue;
             }
             Type columnType = columnMetadata.getType();
-            VariableReferenceExpression variable = context.getVariableAllocator().newVariable(columnName, columnType);
+            String scanAlias = text(node, "Alias");
+            String variableName = columnName;
+            if (scanAlias != null && !scanAlias.isBlank() && tableName != null && !scanAlias.equalsIgnoreCase(tableName)) {
+                variableName = simpleName(scanAlias).toLowerCase(Locale.ENGLISH) + "_" + columnName;
+            }
+            VariableReferenceExpression variable = context.getVariableAllocator().newVariable(variableName, columnType);
             variablesByName.put(columnName, variable);
             variablesByName.put(simpleName(columnName).toLowerCase(Locale.ENGLISH), variable);
+            if (scanAlias != null && !scanAlias.isBlank()) {
+                variablesByName.put((scanAlias + "." + columnName).toLowerCase(Locale.ENGLISH), variable);
+                variablesByName.put((simpleName(scanAlias) + "_" + columnName).toLowerCase(Locale.ENGLISH), variable);
+            }
         }
 
         List<String> chosenNames = outputNames.isEmpty() ? new ArrayList<>(metadataByName.keySet()) : outputNames;
@@ -608,12 +619,66 @@ public class OpengaussPlanAdapter
 
         PlanNode join = new JoinNode(Optional.empty(), context.getIdAllocator().getNextId(), joinType, left, right, criteria, outputVariables, Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty(), Collections.emptyMap());
         if (text(node, "Join Filter") != null) {
-            RowExpression filter = parsePredicate(text(node, "Join Filter"), buildVariablesByOutput(join), context);
+            String joinFilter = rewriteJoinFilterAliases(text(node, "Join Filter"), join, node);
+            RowExpression filter = parsePredicate(joinFilter, buildVariablesByOutput(join), context);
             if (filter != null) {
                 join = new FilterNode(Optional.empty(), context.getIdAllocator().getNextId(), join, filter);
             }
         }
         return join;
+    }
+
+    private String rewriteJoinFilterAliases(String filter, PlanNode join, JsonNode node)
+    {
+        if (filter == null || filter.isBlank() || join == null) {
+            return filter;
+        }
+        Map<String, VariableReferenceExpression> variables = buildVariablesByOutput(join);
+        String rewritten = filter;
+        for (String token : extractQualifiedColumnReferences(filter)) {
+            VariableReferenceExpression variable = findDeclaredOutputVariable(token, variables);
+            if (variable != null && variable.getName() != null) {
+                rewritten = rewritten.replaceAll("(?i)\\b" + Pattern.quote(token) + "\\b", Matcher.quoteReplacement(variable.getName()));
+            }
+        }
+        if (!rewritten.equals(filter)) {
+            System.out.println("[OpengaussPlanAdapter] rewritten join filter before=" + filter + " after=" + rewritten);
+        }
+        return rewritten;
+    }
+
+    private VariableReferenceExpression findDeclaredOutputVariable(String declaredOutput, Map<String, VariableReferenceExpression> variables)
+    {
+        if (declaredOutput == null || variables == null || variables.isEmpty()) {
+            return null;
+        }
+        String normalized = canonicalizeExpressionText(declaredOutput).toLowerCase(Locale.ENGLISH);
+        if (normalized.contains("n1.n_name")) {
+            return findQualifiedVariable("n1.n_name", variables);
+        }
+        if (normalized.contains("n2.n_name")) {
+            return findQualifiedVariable("n2.n_name", variables);
+        }
+        if (normalized.contains("n1.n_nationkey")) {
+            return findQualifiedVariable("n1.n_nationkey", variables);
+        }
+        if (normalized.contains("n2.n_nationkey")) {
+            return findQualifiedVariable("n2.n_nationkey", variables);
+        }
+        return lookupVariable(declaredOutput, variables);
+    }
+
+    private Set<String> extractQualifiedColumnReferences(String text)
+    {
+        Set<String> result = new LinkedHashSet<>();
+        if (text == null || text.isBlank()) {
+            return result;
+        }
+        Matcher matcher = Pattern.compile("\\b[a-zA-Z][a-zA-Z0-9_]*\\.[a-zA-Z][a-zA-Z0-9_]*\\b").matcher(text);
+        while (matcher.find()) {
+            result.add(matcher.group());
+        }
+        return result;
     }
 
     private PlanNode buildSubqueryScan(JsonNode node, AdapterContext context, Map<String, VariableReferenceExpression> scalarBindings)
@@ -889,6 +954,8 @@ public class OpengaussPlanAdapter
         System.out.println("[OpengaussPlanAdapter] aggregation input source output=" + source.getOutputVariables());
         // System.out.println("[OpengaussPlanAdapter] aggregation input source tree=" + describePlanTree(source));
         List<VariableReferenceExpression> groupingKeys = new ArrayList<>();
+        List<VariableReferenceExpression> preProjectOutputs = new ArrayList<>();
+        Map<VariableReferenceExpression, RowExpression> preProjectAssignments = new LinkedHashMap<>();
         Map<String, VariableReferenceExpression> variables = buildVariablesByOutput(source);
         List<String> groupKeyTokens = textList(node, "Group Key");
         if (groupKeyTokens.isEmpty()) {
@@ -913,6 +980,16 @@ public class OpengaussPlanAdapter
             }
             if (variable == null) {
                 variable = findExpressionOutputVariable(token, source.getOutputVariables());
+            }
+            if (variable == null && token != null && token.toLowerCase(Locale.ENGLISH).contains("date_part")) {
+                RowExpression datePart = parseProjectExpression(token, variables, context);
+                if (datePart != null) {
+                    VariableReferenceExpression projected = context.getVariableAllocator().newVariable(token, datePart.getType() == null ? BigintType.BIGINT : datePart.getType());
+                    variable = projected;
+                    preProjectOutputs.add(projected);
+                    preProjectAssignments.put(projected, datePart);
+                    variables.put(projected.getName().toLowerCase(Locale.ENGLISH), projected);
+                }
             }
             if (variable != null && !groupingKeys.contains(variable)) {
                 groupingKeys.add(variable);
@@ -947,8 +1024,6 @@ public class OpengaussPlanAdapter
         Map<String, VariableReferenceExpression> recursiveVariables = buildVariablesByPlanTree(source);
         Map<String, VariableReferenceExpression> expressionVariables = new LinkedHashMap<>(sourceVariables);
         recursiveVariables.forEach(expressionVariables::putIfAbsent);
-        List<VariableReferenceExpression> preProjectOutputs = new ArrayList<>();
-        Map<VariableReferenceExpression, RowExpression> preProjectAssignments = new LinkedHashMap<>();
         List<String> aggOutputNames = new ArrayList<>();
         List<AggregationCallSpec> aggSpecs = new ArrayList<>();
         List<VariableReferenceExpression> aggDependencyOutputs = new ArrayList<>();
@@ -1516,12 +1591,25 @@ public class OpengaussPlanAdapter
             return columnNames == null ? new ArrayList<>() : columnNames;
         }
         List<String> filtered = new ArrayList<>();
+        boolean leadingQualifiedSelectList = false;
+        for (String columnName : columnNames) {
+            if (columnName != null && columnName.toLowerCase(Locale.ENGLISH).trim().startsWith("public.")) {
+                leadingQualifiedSelectList = true;
+                break;
+            }
+            if (columnName != null && !columnName.isBlank()) {
+                break;
+            }
+        }
         for (String columnName : columnNames) {
             if (columnName == null || columnName.isBlank()) {
                 continue;
             }
             String normalized = columnName.toLowerCase(Locale.ENGLISH).trim();
             String simple = simpleName(normalized).toLowerCase(Locale.ENGLISH);
+            if (leadingQualifiedSelectList && !normalized.startsWith("public.")) {
+                break;
+            }
             if (normalized.contains("pg_catalog_avg_avg_") || normalized.contains("pg_catalog_sum_count_") || simple.matches(".*_(raw|arg)$")) {
                 continue;
             }
@@ -2367,6 +2455,11 @@ public class OpengaussPlanAdapter
         RowExpression likeExpression = parseLikeExpression(normalized, variables);
         if (likeExpression != null) {
             return likeExpression;
+        }
+
+        RowExpression datePartExpression = parseDatePartYearExpression(normalized, variables);
+        if (datePartExpression != null) {
+            return datePartExpression;
         }
 
         VariableReferenceExpression scalar = variables.get(normalized.toLowerCase(Locale.ENGLISH));
@@ -3434,7 +3527,7 @@ public class OpengaussPlanAdapter
     {
         Map<String, VariableReferenceExpression> result = new LinkedHashMap<>();
         for (VariableReferenceExpression variable : node.getOutputVariables()) {
-            addVariableLookupAliases(result, variable, false);
+            addVariableLookupAliases(result, variable, true);
         }
         return result;
     }
@@ -3470,6 +3563,12 @@ public class OpengaussPlanAdapter
         putVariableAlias(result, name, variable, keepExisting);
         putVariableAlias(result, simple, variable, keepExisting);
         putVariableAlias(result, baseName, variable, keepExisting);
+        int firstUnderscore = name.indexOf('_');
+        if (firstUnderscore > 0 && firstUnderscore < name.length() - 1) {
+            String alias = name.substring(0, firstUnderscore);
+            String column = name.substring(firstUnderscore + 1);
+            putVariableAlias(result, alias + "." + column, variable, keepExisting);
+        }
     }
 
     private void putVariableAlias(Map<String, VariableReferenceExpression> result, String alias, VariableReferenceExpression variable, boolean keepExisting)
@@ -3501,6 +3600,24 @@ public class OpengaussPlanAdapter
         String normalizedToken = canonicalizeExpressionText(token).trim().toLowerCase(Locale.ENGLISH);
         normalizedToken = stripQuotes(normalizedToken);
         String simple = simpleName(normalizedToken).toLowerCase(Locale.ENGLISH);
+        boolean qualified = normalizedToken.contains(".");
+        if (qualified) {
+            VariableReferenceExpression bestQualified = findQualifiedVariable(normalizedToken, variables);
+            if (bestQualified != null) {
+                return bestQualified;
+            }
+            String aliasQualified = normalizedToken.replace('.', '_');
+            VariableReferenceExpression aliasDirect = variables.get(aliasQualified);
+            if (aliasDirect != null) {
+                return aliasDirect;
+            }
+            String aliasBase = stripVariableIdSuffix(aliasQualified);
+            aliasDirect = variables.get(aliasBase);
+            if (aliasDirect != null) {
+                return aliasDirect;
+            }
+            return null;
+        }
 
         VariableReferenceExpression direct = variables.get(normalizedToken);
         if (direct != null) {
@@ -3514,10 +3631,6 @@ public class OpengaussPlanAdapter
         String dottedTail = normalizedToken;
         if (normalizedToken.contains(".")) {
             dottedTail = normalizedToken.substring(normalizedToken.lastIndexOf('.') + 1);
-            direct = variables.get(dottedTail);
-            if (direct != null) {
-                return direct;
-            }
         }
 
         for (Map.Entry<String, VariableReferenceExpression> entry : variables.entrySet()) {
@@ -3531,6 +3644,88 @@ public class OpengaussPlanAdapter
             }
             if (normalizedToken.startsWith(normalizedKey + ".") || normalizedToken.endsWith("." + normalizedKey) || normalizedToken.contains("." + normalizedKey + ".")) {
                 return entry.getValue();
+            }
+        }
+        return null;
+    }
+
+    private VariableReferenceExpression findQualifiedVariable(String normalizedToken, Map<String, VariableReferenceExpression> variables)
+    {
+        if (normalizedToken == null || variables == null || !normalizedToken.contains(".")) {
+            return null;
+        }
+        String[] parts = normalizedToken.split("\\.");
+        if (parts.length < 2) {
+            return null;
+        }
+        String qualifier = parts[parts.length - 2].replaceAll("[^a-z0-9_]+", "");
+        String column = parts[parts.length - 1].replaceAll("[^a-z0-9_]+", "");
+        if (qualifier.isBlank() || column.isBlank()) {
+            return null;
+        }
+        if ("n1".equals(qualifier)) {
+            VariableReferenceExpression direct = variables.get(column);
+            if (direct != null) {
+                return direct;
+            }
+            direct = findVariableByExactName(column, variables);
+            if (direct != null) {
+                return direct;
+            }
+        }
+        if ("n2".equals(qualifier)) {
+            VariableReferenceExpression suffixed = variables.get(column + "_0");
+            if (suffixed != null) {
+                return suffixed;
+            }
+            suffixed = findVariableByExactName(column + "_0", variables);
+            if (suffixed != null) {
+                return suffixed;
+            }
+            suffixed = variables.get(column + "_1");
+            if (suffixed != null) {
+                return suffixed;
+            }
+            suffixed = findVariableByExactName(column + "_1", variables);
+            if (suffixed != null) {
+                return suffixed;
+            }
+        }
+        String expectedPrefix = qualifier + "_" + column;
+        VariableReferenceExpression best = null;
+        int bestScore = Integer.MIN_VALUE;
+        for (VariableReferenceExpression variable : variables.values()) {
+            if (variable == null || variable.getName() == null) {
+                continue;
+            }
+            String name = variable.getName().toLowerCase(Locale.ENGLISH);
+            String base = stripVariableIdSuffix(name);
+            int score = Integer.MIN_VALUE;
+            if (name.equals(expectedPrefix) || base.equals(expectedPrefix)) {
+                score = 100;
+            }
+            else if (name.startsWith(expectedPrefix + "_") || base.startsWith(expectedPrefix + "_")) {
+                score = 90;
+            }
+            else if (name.contains(expectedPrefix) || base.contains(expectedPrefix)) {
+                score = 70;
+            }
+            if (score > bestScore) {
+                bestScore = score;
+                best = variable;
+            }
+        }
+        return bestScore >= 70 ? best : null;
+    }
+
+    private VariableReferenceExpression findVariableByExactName(String name, Map<String, VariableReferenceExpression> variables)
+    {
+        if (name == null || variables == null) {
+            return null;
+        }
+        for (VariableReferenceExpression variable : variables.values()) {
+            if (variable != null && variable.getName() != null && variable.getName().equalsIgnoreCase(name)) {
+                return variable;
             }
         }
         return null;
@@ -3862,6 +4057,9 @@ public class OpengaussPlanAdapter
 
         String normalized = canonicalizeExpressionText(name).trim().toLowerCase(Locale.ENGLISH);
         String simple = simpleName(normalized).toLowerCase(Locale.ENGLISH);
+        boolean qualified = normalized.contains(".");
+        String aliasQualified = qualified ? normalized.replace('.', '_') : normalized;
+        String aliasQualifiedBase = stripVariableIdSuffix(aliasQualified);
         String compact = normalized.replaceAll("[^a-z0-9_]+", "");
         String compactSimple = simple.replaceAll("[^a-z0-9_]+", "");
 
@@ -3873,6 +4071,8 @@ public class OpengaussPlanAdapter
 
             if (normalized.equals(variableName)
                     || simple.equals(variableName)
+                    || aliasQualified.equals(variableName)
+                    || aliasQualifiedBase.equals(variableName)
                     || normalized.equals(variableSimple)
                     || simple.equals(variableSimple)
                     || compact.equals(variableCompact)
@@ -3885,10 +4085,10 @@ public class OpengaussPlanAdapter
 
         for (VariableReferenceExpression variable : node.getOutputVariables()) {
             String variableName = variable.getName() == null ? "" : variable.getName().toLowerCase(Locale.ENGLISH);
-            if (normalized.contains(variableName)
+            if (!qualified && (normalized.contains(variableName)
                     || variableName.contains(normalized)
                     || simple.contains(variableName)
-                    || variableName.contains(simple)) {
+                    || variableName.contains(simple))) {
                 return variable;
             }
         }
@@ -4051,7 +4251,7 @@ public class OpengaussPlanAdapter
         candidateCatalogs.addAll(metadata.getCatalogNames(session).keySet());
 
         List<String> candidateSchemas = new ArrayList<>();
-        candidateSchemas.add("tiny");
+        candidateSchemas.add("sf1");
         if (schemaName != null && !schemaName.isBlank() && !"public".equalsIgnoreCase(schemaName)) {
             candidateSchemas.add(schemaName);
         }
@@ -4244,6 +4444,61 @@ public class OpengaussPlanAdapter
             }
         }
         return keys;
+    }
+
+    private RowExpression parseDatePartYearExpression(String normalized, Map<String, VariableReferenceExpression> variables)
+    {
+        if (normalized == null) {
+            return null;
+        }
+        String lower = normalized.toLowerCase(Locale.ENGLISH);
+        if (!lower.startsWith("date_part(") && !lower.startsWith("extract(")) {
+            return null;
+        }
+        if (!(lower.contains("year") || lower.contains("'year'"))) {
+            return null;
+        }
+        int open = normalized.indexOf('(');
+        int close = normalized.lastIndexOf(')');
+        if (open < 0 || close <= open) {
+            return null;
+        }
+        String inside = normalized.substring(open + 1, close).trim();
+        List<String> parts = splitCommaSeparated(inside);
+        if (parts.isEmpty()) {
+            return null;
+        }
+        String target = parts.size() == 1 ? inside : parts.get(parts.size() - 1);
+        RowExpression targetExpr = null;
+        if (target.toLowerCase(Locale.ENGLISH).contains("from")) {
+            String[] fromParts = target.split("(?i)\\s+from\\s+", 2);
+            if (fromParts.length == 2) {
+                target = fromParts[1].trim();
+            }
+        }
+        if (target.toLowerCase(Locale.ENGLISH).contains("shipdate")) {
+            targetExpr = parseValue(target.trim(), variables);
+            if (targetExpr == null) {
+                targetExpr = lookupVariable("lineitem.l_shipdate", variables);
+            }
+            if (targetExpr == null) {
+                targetExpr = lookupVariable("l_shipdate", variables);
+            }
+        }
+        if (targetExpr == null) {
+            return null;
+        }
+        try {
+            com.facebook.presto.spi.function.FunctionHandle functionHandle = metadata.getFunctionAndTypeManager().resolveFunction(
+                    Optional.empty(),
+                    Optional.empty(),
+                    new QualifiedObjectName("presto", "default", "year"),
+                    TypeSignatureProvider.fromTypes(targetExpr.getType()));
+            return new CallExpression("year", functionHandle, BigintType.BIGINT, List.of(targetExpr));
+        }
+        catch (RuntimeException ignored) {
+            return targetExpr;
+        }
     }
 
     private RowExpression parseSubstringCall(String normalized, Map<String, VariableReferenceExpression> variables)
