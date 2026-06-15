@@ -524,10 +524,12 @@ public class OpengaussPlanAdapter
             boolean rightSidePreserved = normalizedJoinType.contains("right");
             PlanNode preservedSide = translateNode(rightSidePreserved ? rightJson : leftJson, context, scalarBindings);
             PlanNode filteringSide = translateNode(rightSidePreserved ? leftJson : rightJson, context, scalarBindings);
-            String joinCondition = firstNonNull(text(node, "Hash Cond"), text(node, "Merge Cond"), text(node, "Join Filter"));
+            String hashCondition = firstNonNull(text(node, "Hash Cond"), text(node, "Merge Cond"));
+            String joinFilterText = text(node, "Join Filter");
+            String joinCondition = firstNonNull(hashCondition, joinFilterText);
             VariableReferenceExpression sourceJoinVariable = null;
             VariableReferenceExpression filteringJoinVariable = null;
-            List<String> conditions = splitJoinConditions(joinCondition);
+            List<String> conditions = splitJoinConditions(hashCondition);
             for (String condition : conditions) {
                 String[] parts = condition.split("=");
                 if (parts.length != 2) {
@@ -570,25 +572,108 @@ public class OpengaussPlanAdapter
                         + " coercedFilteringKey=" + coercedFilteringJoinVariable + ":" + coercedFilteringJoinVariable.getType());
                 filteringJoinVariable = coercedFilteringJoinVariable;
             }
-            VariableReferenceExpression semiOutput = context.getVariableAllocator().newVariable("semi_join", BooleanType.BOOLEAN);
-            SemiJoinNode semiJoin = new SemiJoinNode(
-                    Optional.empty(),
-                    context.getIdAllocator().getNextId(),
-                    preservedSide,
-                    filteringSide,
-                    sourceJoinVariable,
-                    filteringJoinVariable,
-                    semiOutput,
-                    Optional.empty(),
-                    Optional.empty(),
-                    Optional.of(normalizedJoinType.contains("replic") ? SemiJoinNode.DistributionType.REPLICATED : SemiJoinNode.DistributionType.PARTITIONED),
-                    Collections.emptyMap());
-            if (normalizedJoinType.contains("anti")) {
-                RowExpression antiPredicate = new CallExpression("not", builtInUnaryHandle("not", BooleanType.BOOLEAN, semiOutput.getType()), BooleanType.BOOLEAN, List.of(semiOutput));
-                return new FilterNode(Optional.empty(), context.getIdAllocator().getNextId(), semiJoin, antiPredicate);
+
+            if (joinFilterText == null || joinFilterText.isBlank()) {
+                VariableReferenceExpression semiOutput = context.getVariableAllocator().newVariable("semi_join", BooleanType.BOOLEAN);
+                SemiJoinNode semiJoin = new SemiJoinNode(
+                        Optional.empty(),
+                        context.getIdAllocator().getNextId(),
+                        preservedSide,
+                        filteringSide,
+                        sourceJoinVariable,
+                        filteringJoinVariable,
+                        semiOutput,
+                        Optional.empty(),
+                        Optional.empty(),
+                        Optional.of(normalizedJoinType.contains("replic") ? SemiJoinNode.DistributionType.REPLICATED : SemiJoinNode.DistributionType.PARTITIONED),
+                        Collections.emptyMap());
+                if (normalizedJoinType.contains("anti")) {
+                    RowExpression antiPredicate = new CallExpression("not", builtInUnaryHandle("not", BooleanType.BOOLEAN, semiOutput.getType()), BooleanType.BOOLEAN, List.of(semiOutput));
+                    return new FilterNode(Optional.empty(), context.getIdAllocator().getNextId(), semiJoin, antiPredicate);
+                }
+                RowExpression semiPredicate = semiOutput;
+                return new FilterNode(Optional.empty(), context.getIdAllocator().getNextId(), semiJoin, semiPredicate);
             }
-            RowExpression semiPredicate = semiOutput;
-            return new FilterNode(Optional.empty(), context.getIdAllocator().getNextId(), semiJoin, semiPredicate);
+
+            List<EquiJoinClause> semiCriteria = List.of(new EquiJoinClause(sourceJoinVariable, filteringJoinVariable));
+            PlanNode joined = new JoinNode(Optional.empty(), context.getIdAllocator().getNextId(), JoinType.INNER, preservedSide, filteringSide, semiCriteria,
+                    appendOutputs(preservedSide.getOutputVariables(), filteringSide.getOutputVariables()), Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty(), Collections.emptyMap());
+            RowExpression joinFilter = parsePredicate(rewriteJoinFilterAliases(joinFilterText, joined, node), buildVariablesByOutput(joined), context);
+            if (joinFilter != null) {
+                joined = new FilterNode(Optional.empty(), context.getIdAllocator().getNextId(), joined, joinFilter);
+            }
+
+            if (normalizedJoinType.contains("semi")) {
+                Map<VariableReferenceExpression, RowExpression> assignments = new LinkedHashMap<>();
+                List<VariableReferenceExpression> outputs = new ArrayList<>();
+                for (VariableReferenceExpression variable : preservedSide.getOutputVariables()) {
+                    assignments.put(variable, variable);
+                    outputs.add(variable);
+                }
+                PlanNode distinct = new ProjectNode(Optional.empty(), context.getIdAllocator().getNextId(), joined, Assignments.copyOf(assignments), ProjectNode.Locality.LOCAL);
+                if (!outputs.isEmpty()) {
+                    distinct = new AggregationNode(Optional.empty(), context.getIdAllocator().getNextId(), distinct, Collections.emptyMap(), AggregationNode.singleGroupingSet(outputs), Collections.emptyList(), AggregationNode.Step.SINGLE, Optional.empty(), Optional.empty(), Optional.empty());
+                }
+                return distinct;
+            }
+
+            PlanNode offendingPreservedSide = translateNode(rightSidePreserved ? rightJson : leftJson, context, scalarBindings);
+            PlanNode offendingFilteringSide = translateNode(rightSidePreserved ? leftJson : rightJson, context, scalarBindings);
+            VariableReferenceExpression offendingSourceJoinVariable = null;
+            VariableReferenceExpression offendingFilteringJoinVariable = null;
+            for (String condition : conditions) {
+                String[] parts = condition.split("=");
+                if (parts.length != 2) {
+                    continue;
+                }
+                VariableReferenceExpression preservedLeft = resolveJoinVariable(offendingPreservedSide, parts[0].trim());
+                VariableReferenceExpression preservedRight = resolveJoinVariable(offendingPreservedSide, parts[1].trim());
+                VariableReferenceExpression filteringLeft = resolveJoinVariable(offendingFilteringSide, parts[0].trim());
+                VariableReferenceExpression filteringRight = resolveJoinVariable(offendingFilteringSide, parts[1].trim());
+                if (preservedLeft != null && filteringRight != null) {
+                    offendingSourceJoinVariable = preservedLeft;
+                    offendingFilteringJoinVariable = filteringRight;
+                    break;
+                }
+                if (preservedRight != null && filteringLeft != null) {
+                    offendingSourceJoinVariable = preservedRight;
+                    offendingFilteringJoinVariable = filteringLeft;
+                    break;
+                }
+            }
+            if (offendingSourceJoinVariable == null || offendingFilteringJoinVariable == null) {
+                throw new IllegalArgumentException("Unable to resolve filtered anti join variables for condition=" + joinCondition
+                        + " preservedOutputs=" + offendingPreservedSide.getOutputVariables()
+                        + " filteringOutputs=" + offendingFilteringSide.getOutputVariables());
+            }
+            PlanNode offendingJoined = new JoinNode(Optional.empty(), context.getIdAllocator().getNextId(), JoinType.INNER, offendingPreservedSide, offendingFilteringSide,
+                    List.of(new EquiJoinClause(offendingSourceJoinVariable, offendingFilteringJoinVariable)),
+                    appendOutputs(offendingPreservedSide.getOutputVariables(), offendingFilteringSide.getOutputVariables()), Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty(), Collections.emptyMap());
+            RowExpression offendingJoinFilter = parsePredicate(rewriteJoinFilterAliases(joinFilterText, offendingJoined, node), buildVariablesByOutput(offendingJoined), context);
+            if (offendingJoinFilter != null) {
+                offendingJoined = new FilterNode(Optional.empty(), context.getIdAllocator().getNextId(), offendingJoined, offendingJoinFilter);
+            }
+            Map<VariableReferenceExpression, RowExpression> offendingAssignments = new LinkedHashMap<>();
+            List<VariableReferenceExpression> offendingOutputs = new ArrayList<>();
+            for (VariableReferenceExpression variable : offendingPreservedSide.getOutputVariables()) {
+                VariableReferenceExpression renamed = context.getVariableAllocator().newVariable("anti_" + variable.getName(), variable.getType());
+                offendingAssignments.put(renamed, variable);
+                offendingOutputs.add(renamed);
+            }
+            PlanNode offending = new ProjectNode(Optional.empty(), context.getIdAllocator().getNextId(), offendingJoined, Assignments.copyOf(offendingAssignments), ProjectNode.Locality.LOCAL);
+            PlanNode antiJoin = new JoinNode(Optional.empty(), context.getIdAllocator().getNextId(), JoinType.LEFT, preservedSide, offending,
+                    appendEquiJoinCriteria(preservedSide.getOutputVariables(), offendingOutputs), appendOutputs(preservedSide.getOutputVariables(), offendingOutputs), Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty(), Collections.emptyMap());
+            VariableReferenceExpression nullCheckVar = offendingOutputs.isEmpty() ? null : offendingOutputs.get(0);
+            if (nullCheckVar == null) {
+                return antiJoin;
+            }
+            RowExpression antiPredicate = new SpecialFormExpression(SpecialFormExpression.Form.IS_NULL, BooleanType.BOOLEAN, nullCheckVar);
+            PlanNode filteredAnti = new FilterNode(Optional.empty(), context.getIdAllocator().getNextId(), antiJoin, antiPredicate);
+            Map<VariableReferenceExpression, RowExpression> finalAssignments = new LinkedHashMap<>();
+            for (VariableReferenceExpression variable : preservedSide.getOutputVariables()) {
+                finalAssignments.put(variable, variable);
+            }
+            return new ProjectNode(Optional.empty(), context.getIdAllocator().getNextId(), filteredAnti, Assignments.copyOf(finalAssignments), ProjectNode.Locality.LOCAL);
         }
 
         JoinType joinType = parseJoinType(joinTypeText);
@@ -627,6 +712,39 @@ public class OpengaussPlanAdapter
             }
         }
         return join;
+    }
+
+    private List<VariableReferenceExpression> appendOutputs(List<VariableReferenceExpression> left, List<VariableReferenceExpression> right)
+    {
+        List<VariableReferenceExpression> outputs = new ArrayList<>();
+        if (left != null) {
+            outputs.addAll(left);
+        }
+        if (right != null) {
+            outputs.addAll(right);
+        }
+        return outputs;
+    }
+
+    private List<EquiJoinClause> appendEquiJoinCriteria(List<VariableReferenceExpression> left, List<VariableReferenceExpression> right)
+    {
+        if (left == null || right == null || left.isEmpty() || right.isEmpty()) {
+            return Collections.emptyList();
+        }
+        List<EquiJoinClause> criteria = new ArrayList<>();
+        int size = Math.min(left.size(), right.size());
+        for (int i = 0; i < size; i++) {
+            VariableReferenceExpression leftVariable = left.get(i);
+            VariableReferenceExpression rightVariable = right.get(i);
+            if (leftVariable == null || rightVariable == null) {
+                continue;
+            }
+            if (leftVariable.getType() != null && rightVariable.getType() != null && !leftVariable.getType().equals(rightVariable.getType())) {
+                continue;
+            }
+            criteria.add(new EquiJoinClause(leftVariable, rightVariable));
+        }
+        return criteria;
     }
 
     private List<EquiJoinClause> canonicalizeJoinCriteriaForSources(List<EquiJoinClause> criteria, PlanNode left, PlanNode right)
@@ -892,6 +1010,49 @@ public class OpengaussPlanAdapter
         return source;
     }
 
+    private boolean containsTableScan(PlanNode node)
+    {
+        if (node == null) {
+            return false;
+        }
+        if (node instanceof TableScanNode) {
+            return true;
+        }
+        for (PlanNode source : node.getSources()) {
+            if (containsTableScan(source)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private PlanNode ensureJoinProbeSideExchange(PlanNode source, List<EquiJoinClause> criteria, AdapterContext context)
+    {
+        if (source == null || source instanceof ExchangeNode || !containsTableScan(source)) {
+            return source;
+        }
+        List<VariableReferenceExpression> partitioningColumns = new ArrayList<>();
+        if (criteria != null) {
+            for (EquiJoinClause clause : criteria) {
+                if (clause != null && clause.getLeft() != null) {
+                    VariableReferenceExpression partitionColumn = canonicalizePartitionColumnForSource(clause.getLeft(), source);
+                    if (partitionColumn != null) {
+                        partitioningColumns.add(partitionColumn);
+                    }
+                }
+            }
+        }
+        if (partitioningColumns.isEmpty()) {
+            return ExchangeNode.replicatedExchange(context.getIdAllocator().getNextId(), ExchangeNode.Scope.REMOTE_STREAMING, source);
+        }
+        return ExchangeNode.partitionedExchange(
+                context.getIdAllocator().getNextId(),
+                ExchangeNode.Scope.REMOTE_STREAMING,
+                source,
+                Partitioning.create(SystemPartitioningHandle.FIXED_HASH_DISTRIBUTION, partitioningColumns),
+                Optional.empty());
+    }
+
     private PlanNode ensureJoinBuildSideExchange(PlanNode source, List<EquiJoinClause> criteria, AdapterContext context)
     {
         if (source == null || source instanceof ExchangeNode) {
@@ -916,14 +1077,16 @@ public class OpengaussPlanAdapter
             return source;
         }
 
-        // Build side of a join needs a local hash distribution so the join
-        // operator can consume a properly grouped input.
-        return ExchangeNode.partitionedExchange(
-                context.getIdAllocator().getNextId(),
-                ExchangeNode.Scope.LOCAL,
-                source,
-                Partitioning.create(SystemPartitioningHandle.FIXED_HASH_DISTRIBUTION, partitioningColumns),
-                Optional.empty());
+        // Build side of a join must be separated by a remote exchange. A local
+        // exchange does not create a new source fragment, so a multi-join scalar
+        // subquery such as TPC-H q11 can leave partsupp/supplier/nation scans in
+        // the same fragment and fail split-source planning with "expected one
+        // element". Do not use a remote system hash partitioning here: this
+        // execution path expects remote partitioning handles to come from the
+        // connector. A replicated remote exchange is enough to cut the source
+        // fragment boundary without introducing an invalid system partitioning
+        // handle.
+        return ExchangeNode.replicatedExchange(context.getIdAllocator().getNextId(), ExchangeNode.Scope.REMOTE_STREAMING, source);
     }
 
     private VariableReferenceExpression canonicalizePartitionColumnForSource(VariableReferenceExpression requested, PlanNode source)
@@ -1246,7 +1409,7 @@ public class OpengaussPlanAdapter
             String functionName = inferAggregationFunction(text(node, "Node Type"));
             RowExpression fallbackArg = "count".equalsIgnoreCase(functionName) ? new ConstantExpression(1L, BigintType.BIGINT) : firstAggregationInput(functionName, source, node);
             aggOutputNames.add(functionName);
-            aggSpecs.add(new AggregationCallSpec(functionName, inferAggregationSemanticNames(node, source), List.of(fallbackArg), inferAggregationReturnType(functionName, fallbackArg.getType())));
+            aggSpecs.add(new AggregationCallSpec(functionName, inferAggregationSemanticNames(node, source), List.of(fallbackArg), inferAggregationReturnType(functionName, fallbackArg.getType()), null, "__agg_result"));
             collectVariableDependencies(fallbackArg, dependencyLookup, aggDependencyOutputs);
         }
 
@@ -1292,7 +1455,16 @@ public class OpengaussPlanAdapter
             }
             CallExpression callExpression = buildAggregationCall(context, spec.getFunctionName(), List.of(argument), callReturnType);
             aggregations.put(aggregationOutput, new Aggregation(callExpression, Optional.empty(), Optional.empty(), false, Optional.empty()));
-            postAggregationAssignments.put(output, aggregationOutput);
+            RowExpression postAggregationExpression = aggregationOutput;
+            if (spec.getPostAggregationExpressionText() != null && !spec.getPostAggregationExpressionText().isBlank()) {
+                Map<String, VariableReferenceExpression> postVariables = new LinkedHashMap<>();
+                postVariables.put(spec.getPostAggregationPlaceholder().toLowerCase(Locale.ENGLISH), aggregationOutput);
+                postAggregationExpression = parseExpression(spec.getPostAggregationExpressionText(), postVariables, false);
+                if (postAggregationExpression == null) {
+                    postAggregationExpression = aggregationOutput;
+                }
+            }
+            postAggregationAssignments.put(output, postAggregationExpression);
             aggOutputs.add(output);
         }
 
@@ -1369,9 +1541,15 @@ public class OpengaussPlanAdapter
             for (VariableReferenceExpression aggregationOutput : aggregations.keySet()) {
                 havingVariables.putIfAbsent(aggregationOutput.getName().toLowerCase(Locale.ENGLISH), aggregationOutput);
             }
+            for (Map.Entry<String, VariableReferenceExpression> scalarBinding : scalarBindings.entrySet()) {
+                havingVariables.put(scalarBinding.getKey().toLowerCase(Locale.ENGLISH), scalarBinding.getValue());
+                havingVariables.put(scalarBinding.getValue().getName().toLowerCase(Locale.ENGLISH), scalarBinding.getValue());
+            }
             RowExpression havingPredicate = parsePredicate(havingFilter, havingVariables, context);
+            havingPredicate = substituteScalarBindings(havingPredicate, scalarBindings);
             if (havingPredicate != null && BooleanType.BOOLEAN.equals(havingPredicate.getType())) {
-                System.out.println("[OpengaussPlanAdapter] buildAggregation having filter=" + havingFilter + " predicate=" + havingPredicate);
+                aggregationSource = attachScalarPlansForPredicate(aggregationSource, havingPredicate, context);
+                System.out.println("[OpengaussPlanAdapter] buildAggregation having filter=" + havingFilter + " predicate=" + havingPredicate + " scalarBindings=" + scalarBindings.keySet());
                 aggregationSource = new FilterNode(Optional.empty(), context.getIdAllocator().getNextId(), aggregationSource, havingPredicate);
             }
             else {
@@ -1527,12 +1705,10 @@ public class OpengaussPlanAdapter
         Map<String, VariableReferenceExpression> variables = buildVariablesByOutput(source);
         if (sortKey != null) {
             for (String token : splitCommaSeparated(sortKey)) {
-                VariableReferenceExpression variable = lookupVariable(token, variables);
-                if (variable == null) {
-                    variable = findExpressionOutputVariable(token, source.getOutputVariables());
-                }
+                String sortExpression = stripSortDirection(token);
+                VariableReferenceExpression variable = resolveSortVariable(sortExpression, variables, source);
                 if (variable != null) {
-                    SortOrder sortOrder = token.toLowerCase(Locale.ENGLISH).contains(" desc") ? SortOrder.DESC_NULLS_LAST : SortOrder.ASC_NULLS_FIRST;
+                    SortOrder sortOrder = parseSortOrder(token);
                     orderings.add(new Ordering(variable, sortOrder));
                 }
             }
@@ -1549,6 +1725,57 @@ public class OpengaussPlanAdapter
                 + " orderings=" + orderings);
         OrderingScheme orderingScheme = new OrderingScheme(orderings);
         return new SortNode(Optional.empty(), context.getIdAllocator().getNextId(), source, orderingScheme, false, Collections.emptyList());
+    }
+
+    private VariableReferenceExpression resolveSortVariable(String sortExpression, Map<String, VariableReferenceExpression> variables, PlanNode source)
+    {
+        if (sortExpression == null || variables == null || variables.isEmpty()) {
+            return null;
+        }
+        String normalized = stripUnmatchedOuterParens(canonicalizeExpressionText(sortExpression).trim());
+        String lower = normalized.toLowerCase(Locale.ENGLISH);
+        if (lower.equals("count(*)") || lower.equals("count(1)")) {
+            VariableReferenceExpression count = selectBestMatchingVariable(variables, "count", "count");
+            if (count != null) {
+                return count;
+            }
+        }
+        VariableReferenceExpression variable = lookupVariable(normalized, variables);
+        if (variable != null) {
+            return variable;
+        }
+        RowExpression resolvedSortExpression = resolveDeclaredOutputExpression(normalized, variables);
+        if (resolvedSortExpression instanceof VariableReferenceExpression) {
+            return (VariableReferenceExpression) resolvedSortExpression;
+        }
+        variable = findExpressionOutputVariable(normalized, source.getOutputVariables());
+        if (variable != null) {
+            return variable;
+        }
+        return lookupVariableByExpressionShape(normalized, variables);
+    }
+
+    private String stripSortDirection(String token)
+    {
+        if (token == null) {
+            return null;
+        }
+        String normalized = token.trim();
+        normalized = normalized.replaceAll("^\\[", "").replaceAll("\\]$", "").trim();
+        normalized = normalized.replaceAll("^\"|\"$", "").trim();
+        normalized = normalized.replaceAll("(?i)\\s+NULLS\\s+(FIRST|LAST)\\s*$", "").trim();
+        normalized = normalized.replaceAll("(?i)\\s+(ASC|DESC)\\s*$", "").trim();
+        normalized = normalized.replaceAll("^\"|\"$", "").trim();
+        return normalized;
+    }
+
+    private SortOrder parseSortOrder(String token)
+    {
+        String lower = token == null ? "" : token.toLowerCase(Locale.ENGLISH);
+        if (lower.contains(" desc")) {
+            return lower.contains("nulls first") ? SortOrder.DESC_NULLS_FIRST : SortOrder.DESC_NULLS_LAST;
+        }
+        return lower.contains("nulls last") ? SortOrder.ASC_NULLS_LAST : SortOrder.ASC_NULLS_FIRST;
     }
 
     private PlanNode buildTopN(JsonNode node, AdapterContext context, Map<String, VariableReferenceExpression> scalarBindings)
@@ -5339,8 +5566,9 @@ public class OpengaussPlanAdapter
         while (canStripWrappingParens(inside)) {
             inside = inside.substring(1, inside.length() - 1).trim();
         }
+        String postAggregationExpressionText = buildPostAggregationExpressionText(normalized, open, close, "__agg_result");
         if ("count".equalsIgnoreCase(functionName) && ("*".equals(inside) || "1".equals(inside))) {
-            return new AggregationCallSpec("count", inferAggregationSemanticNames(node, source), List.of(new ConstantExpression(1L, BigintType.BIGINT)), BigintType.BIGINT);
+            return new AggregationCallSpec("count", inferAggregationSemanticNames(node, source), List.of(new ConstantExpression(1L, BigintType.BIGINT)), BigintType.BIGINT, postAggregationExpressionText, "__agg_result");
         }
         if ("sum".equalsIgnoreCase(functionName) && ("count(*)".equalsIgnoreCase(inside) || "count(1)".equalsIgnoreCase(inside))) {
             // sum(count(*)) is the two-phase aggregation pattern: the outer aggregate sums
@@ -5358,7 +5586,7 @@ public class OpengaussPlanAdapter
             }
             if (countVariable != null) {
                 System.out.println("[OpengaussPlanAdapter] parseAggregationFragment sum(count(*)) resolved countVariable=" + countVariable);
-                return new AggregationCallSpec("sum", inferAggregationSemanticNames(node, source), List.of(countVariable), BigintType.BIGINT);
+                return new AggregationCallSpec("sum", inferAggregationSemanticNames(node, source), List.of(countVariable), BigintType.BIGINT, postAggregationExpressionText, "__agg_result");
             }
             // No partial count variable found – fall through to generic handling
         }
@@ -5547,7 +5775,31 @@ public class OpengaussPlanAdapter
                 + " returnType=" + returnType
                 + " arguments=" + List.of(argument)
                 + " argumentTypes=" + List.of(argument == null ? null : argument.getType()));
-        return new AggregationCallSpec(functionName, inferAggregationSemanticNames(node, source), List.of(argument), returnType);
+        return new AggregationCallSpec(functionName, inferAggregationSemanticNames(node, source), List.of(argument), returnType, postAggregationExpressionText, "__agg_result");
+    }
+
+    private String buildPostAggregationExpressionText(String normalized, int aggregationOpen, int aggregationClose, String placeholder)
+    {
+        if (normalized == null || placeholder == null || aggregationOpen < 0 || aggregationClose <= aggregationOpen) {
+            return null;
+        }
+        int functionStart = aggregationOpen;
+        while (functionStart > 0) {
+            char previous = normalized.charAt(functionStart - 1);
+            if (Character.isLetterOrDigit(previous) || previous == '_' || previous == '.') {
+                functionStart--;
+                continue;
+            }
+            break;
+        }
+        String expression = normalized.substring(0, functionStart) + placeholder + normalized.substring(aggregationClose + 1);
+        while (canStripWrappingParens(expression)) {
+            expression = expression.substring(1, expression.length() - 1).trim();
+        }
+        if (expression.equals(placeholder)) {
+            return null;
+        }
+        return expression;
     }
 
     private RowExpression parseAggregationArgumentExpression(String text, Map<String, VariableReferenceExpression> variables)
@@ -6060,13 +6312,17 @@ public class OpengaussPlanAdapter
         private final List<String> semanticNames;
         private final List<RowExpression> arguments;
         private final Type returnType;
+        private final String postAggregationExpressionText;
+        private final String postAggregationPlaceholder;
 
-        private AggregationCallSpec(String functionName, List<String> semanticNames, List<RowExpression> arguments, Type returnType)
+        private AggregationCallSpec(String functionName, List<String> semanticNames, List<RowExpression> arguments, Type returnType, String postAggregationExpressionText, String postAggregationPlaceholder)
         {
             this.functionName = functionName;
             this.semanticNames = semanticNames;
             this.arguments = arguments;
             this.returnType = returnType;
+            this.postAggregationExpressionText = postAggregationExpressionText;
+            this.postAggregationPlaceholder = postAggregationPlaceholder;
         }
 
         private String getFunctionName()
@@ -6087,6 +6343,16 @@ public class OpengaussPlanAdapter
         private Type getReturnType()
         {
             return returnType;
+        }
+
+        private String getPostAggregationExpressionText()
+        {
+            return postAggregationExpressionText;
+        }
+
+        private String getPostAggregationPlaceholder()
+        {
+            return postAggregationPlaceholder;
         }
     }
 
