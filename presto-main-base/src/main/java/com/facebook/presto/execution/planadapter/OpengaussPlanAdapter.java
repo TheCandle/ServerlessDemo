@@ -1924,6 +1924,7 @@ public class OpengaussPlanAdapter
         }
 
         columnNames = filterUserVisibleOutputNames(columnNames);
+        columnNames = selectLeadingQualifiedOutputs(columnNames);
         int outputSize = outputVariables.size();
         int columnSize = columnNames.size();
         int pairSize = Math.min(columnSize, outputSize);
@@ -1960,7 +1961,8 @@ public class OpengaussPlanAdapter
             assignments.put(alias, source);
         }
 
-        if (outputSize > pairSize) {
+        boolean declaredSelectList = columnNames.stream().anyMatch(name -> name != null && name.toLowerCase(Locale.ENGLISH).startsWith("public."));
+        if (!declaredSelectList && outputSize > pairSize) {
             for (int i = pairSize; i < outputSize; i++) {
                 VariableReferenceExpression source = outputVariables.get(i);
                 VariableReferenceExpression alias = context.getVariableAllocator().newVariable(source.getName(), source.getType());
@@ -2021,6 +2023,30 @@ public class OpengaussPlanAdapter
             filtered.add(columnName);
         }
         return filtered;
+    }
+
+    private List<String> selectLeadingQualifiedOutputs(List<String> columnNames)
+    {
+        if (columnNames == null || columnNames.isEmpty()) {
+            return columnNames == null ? new ArrayList<>() : columnNames;
+        }
+        List<String> selected = new ArrayList<>();
+        boolean sawQualified = false;
+        for (String columnName : columnNames) {
+            if (columnName == null || columnName.isBlank()) {
+                continue;
+            }
+            String normalized = columnName.trim().toLowerCase(Locale.ENGLISH);
+            if (normalized.startsWith("public.")) {
+                sawQualified = true;
+                selected.add(columnName);
+                continue;
+            }
+            if (sawQualified) {
+                break;
+            }
+        }
+        return selected.isEmpty() ? columnNames : selected;
     }
 
     private boolean shouldUseOrdinalOutputForDeclaredColumn(String columnName, VariableReferenceExpression candidateSource, List<VariableReferenceExpression> outputVariables, int ordinal)
