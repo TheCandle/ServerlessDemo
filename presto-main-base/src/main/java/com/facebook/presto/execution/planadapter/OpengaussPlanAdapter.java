@@ -4313,38 +4313,65 @@ public class OpengaussPlanAdapter
 
         String normalized = canonicalizeExpressionText(name).trim().toLowerCase(Locale.ENGLISH);
         String simple = simpleName(normalized).toLowerCase(Locale.ENGLISH);
+        String simpleBase = stripVariableIdSuffix(simple);
         boolean qualified = normalized.contains(".");
         String aliasQualified = qualified ? normalized.replace('.', '_') : normalized;
         String aliasQualifiedBase = stripVariableIdSuffix(aliasQualified);
         String compact = normalized.replaceAll("[^a-z0-9_]+", "");
         String compactSimple = simple.replaceAll("[^a-z0-9_]+", "");
+        String compactSimpleBase = simpleBase.replaceAll("[^a-z0-9_]+", "");
 
         for (VariableReferenceExpression variable : node.getOutputVariables()) {
             String variableName = variable.getName() == null ? "" : variable.getName().toLowerCase(Locale.ENGLISH);
+            String variableBase = stripVariableIdSuffix(variableName);
             String variableSimple = simpleName(variableName).toLowerCase(Locale.ENGLISH);
+            String variableSimpleBase = stripVariableIdSuffix(variableSimple);
             String variableCompact = variableName.replaceAll("[^a-z0-9_]+", "");
+            String variableCompactBase = variableBase.replaceAll("[^a-z0-9_]+", "");
             String variableCompactSimple = variableSimple.replaceAll("[^a-z0-9_]+", "");
+            String variableCompactSimpleBase = variableSimpleBase.replaceAll("[^a-z0-9_]+", "");
 
             if (normalized.equals(variableName)
                     || simple.equals(variableName)
+                    || simpleBase.equals(variableName)
+                    || simple.equals(variableBase)
+                    || simpleBase.equals(variableBase)
                     || aliasQualified.equals(variableName)
                     || aliasQualifiedBase.equals(variableName)
+                    || aliasQualified.equals(variableBase)
+                    || aliasQualifiedBase.equals(variableBase)
                     || normalized.equals(variableSimple)
                     || simple.equals(variableSimple)
+                    || simpleBase.equals(variableSimple)
+                    || simple.equals(variableSimpleBase)
+                    || simpleBase.equals(variableSimpleBase)
                     || compact.equals(variableCompact)
                     || compact.equals(variableCompactSimple)
+                    || compact.equals(variableCompactBase)
+                    || compact.equals(variableCompactSimpleBase)
                     || compactSimple.equals(variableCompact)
-                    || compactSimple.equals(variableCompactSimple)) {
+                    || compactSimple.equals(variableCompactSimple)
+                    || compactSimple.equals(variableCompactBase)
+                    || compactSimple.equals(variableCompactSimpleBase)
+                    || compactSimpleBase.equals(variableCompact)
+                    || compactSimpleBase.equals(variableCompactSimple)
+                    || compactSimpleBase.equals(variableCompactBase)
+                    || compactSimpleBase.equals(variableCompactSimpleBase)) {
                 return variable;
             }
         }
 
         for (VariableReferenceExpression variable : node.getOutputVariables()) {
             String variableName = variable.getName() == null ? "" : variable.getName().toLowerCase(Locale.ENGLISH);
-            if (!qualified && (normalized.contains(variableName)
+            String variableBase = stripVariableIdSuffix(variableName);
+            if (normalized.contains(variableName)
                     || variableName.contains(normalized)
                     || simple.contains(variableName)
-                    || variableName.contains(simple))) {
+                    || variableName.contains(simple)
+                    || normalized.contains(variableBase)
+                    || variableBase.contains(normalized)
+                    || simple.contains(variableBase)
+                    || variableBase.contains(simple)) {
                 return variable;
             }
         }
