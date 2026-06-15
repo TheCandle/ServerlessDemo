@@ -1665,6 +1665,10 @@ public class OpengaussPlanAdapter
             return null;
         }
         String normalized = stripUnmatchedOuterParens(canonicalizeExpressionText(outputName).trim());
+        RowExpression datePart = parseDatePartYearExpression(normalized, variables);
+        if (datePart != null) {
+            return datePart;
+        }
         VariableReferenceExpression direct = lookupVariable(normalized, variables);
         if (direct != null) {
             return direct;
@@ -4476,14 +4480,12 @@ public class OpengaussPlanAdapter
                 target = fromParts[1].trim();
             }
         }
-        if (target.toLowerCase(Locale.ENGLISH).contains("shipdate")) {
-            targetExpr = parseValue(target.trim(), variables);
-            if (targetExpr == null) {
-                targetExpr = lookupVariable("lineitem.l_shipdate", variables);
-            }
-            if (targetExpr == null) {
-                targetExpr = lookupVariable("l_shipdate", variables);
-            }
+        targetExpr = parseValue(target.trim(), variables);
+        if (targetExpr == null && target.contains(".")) {
+            targetExpr = lookupVariable(target.trim(), variables);
+        }
+        if (targetExpr == null) {
+            targetExpr = lookupVariable(simpleName(target).toLowerCase(Locale.ENGLISH), variables);
         }
         if (targetExpr == null) {
             return null;
