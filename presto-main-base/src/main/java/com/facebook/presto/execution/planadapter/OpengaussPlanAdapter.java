@@ -1486,7 +1486,7 @@ public class OpengaussPlanAdapter
                 continue;
             }
             RowExpression ratioMultiplier = extractLeadingRatioMultiplier(ratioSpec.getOutputName());
-            if (ratioMultiplier != null) {
+            if (ratioMultiplier != null && !isAlreadyAppliedMultiplier(numeratorRaw, ratioMultiplier)) {
                 RowExpression multipliedRatio = buildArithmetic("multiply", ratioMultiplier, ratioExpression);
                 if (multipliedRatio != null) {
                     ratioExpression = multipliedRatio;
@@ -6354,6 +6354,26 @@ public class OpengaussPlanAdapter
         {
             return postAggregationPlaceholder;
         }
+    }
+
+    private boolean isAlreadyAppliedMultiplier(RowExpression expression, RowExpression multiplier)
+    {
+        if (!(expression instanceof CallExpression) || !(multiplier instanceof ConstantExpression)) {
+            return false;
+        }
+        CallExpression call = (CallExpression) expression;
+        if (!call.getDisplayName().toLowerCase(Locale.ENGLISH).contains("multiply") || call.getArguments().isEmpty()) {
+            return false;
+        }
+        RowExpression firstArgument = call.getArguments().get(0);
+        if (!(firstArgument instanceof ConstantExpression)) {
+            return false;
+        }
+        Object firstValue = ((ConstantExpression) firstArgument).getValue();
+        Object multiplierValue = ((ConstantExpression) multiplier).getValue();
+        return firstValue instanceof Number
+                && multiplierValue instanceof Number
+                && Double.compare(((Number) firstValue).doubleValue(), ((Number) multiplierValue).doubleValue()) == 0;
     }
 
     private RowExpression extractLeadingRatioMultiplier(String expression)
