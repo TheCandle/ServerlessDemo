@@ -418,16 +418,93 @@ public class OpengaussPlanAdapter
                 continue;
             }
             scalarPlan = ensureReplicatedExchange(scalarPlan, context);
+            List<EquiJoinClause> criteria = inferScalarPlanCorrelationCriteria(current, scalarPlan, dependency);
             List<VariableReferenceExpression> outputs = new ArrayList<>(current.getOutputVariables());
             for (VariableReferenceExpression scalarOutput : scalarPlan.getOutputVariables()) {
                 if (!outputs.contains(scalarOutput)) {
                     outputs.add(scalarOutput);
                 }
             }
-            current = new JoinNode(Optional.empty(), context.getIdAllocator().getNextId(), JoinType.INNER, current, scalarPlan, Collections.emptyList(), outputs, Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty(), Collections.emptyMap());
-            System.out.println("[OpengaussPlanAdapter] attached scalar plan for dependency=" + dependency + " scalarOutputs=" + scalarPlan.getOutputVariables());
+            current = new JoinNode(Optional.empty(), context.getIdAllocator().getNextId(), JoinType.INNER, current, scalarPlan, criteria, outputs, Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty(), Collections.emptyMap());
+            System.out.println("[OpengaussPlanAdapter] attached scalar plan for dependency=" + dependency + " scalarOutputs=" + scalarPlan.getOutputVariables() + " criteria=" + criteria);
         }
         return current;
+    }
+
+    private List<EquiJoinClause> inferScalarPlanCorrelationCriteria(PlanNode source, PlanNode scalarPlan, VariableReferenceExpression dependency)
+    {
+        if (source == null || scalarPlan == null) {
+            return Collections.emptyList();
+        }
+        List<EquiJoinClause> criteria = new ArrayList<>();
+        for (VariableReferenceExpression scalarOutput : scalarPlan.getOutputVariables()) {
+            if (scalarOutput == null) {
+                continue;
+            }
+            String scalarName = scalarOutput.getName() == null ? "" : scalarOutput.getName().toLowerCase(Locale.ENGLISH);
+            if (!isLikelyScalarCorrelationKey(scalarName)) {
+                continue;
+            }
+            VariableReferenceExpression sourceKey = findBestCorrelationSourceKey(source.getOutputVariables(), scalarOutput);
+            if (sourceKey != null) {
+                criteria.add(new EquiJoinClause(sourceKey, scalarOutput));
+                break;
+            }
+        }
+        return criteria;
+    }
+
+    private boolean isLikelyScalarCorrelationKey(String name)
+    {
+        if (name == null || name.isBlank()) {
+            return false;
+        }
+        String normalized = name.toLowerCase(Locale.ENGLISH);
+        return normalized.equals("_column_")
+                || normalized.equals("_column")
+                || normalized.endsWith("_partkey")
+                || normalized.contains("partkey")
+                || normalized.endsWith("_key");
+    }
+
+    private VariableReferenceExpression findBestCorrelationSourceKey(List<VariableReferenceExpression> sourceOutputs, VariableReferenceExpression scalarKey)
+    {
+        if (sourceOutputs == null || scalarKey == null) {
+            return null;
+        }
+        Type scalarType = scalarKey.getType();
+        String scalarName = scalarKey.getName() == null ? "" : scalarKey.getName().toLowerCase(Locale.ENGLISH);
+        String scalarBase = stripVariableIdSuffix(scalarName);
+        VariableReferenceExpression best = null;
+        int bestScore = Integer.MIN_VALUE;
+        for (VariableReferenceExpression sourceOutput : sourceOutputs) {
+            if (sourceOutput == null || sourceOutput.getName() == null) {
+                continue;
+            }
+            if (scalarType != null && sourceOutput.getType() != null && !scalarType.equals(sourceOutput.getType())) {
+                continue;
+            }
+            String sourceName = sourceOutput.getName().toLowerCase(Locale.ENGLISH);
+            String sourceBase = stripVariableIdSuffix(sourceName);
+            int score = 0;
+            if (sourceBase.equals(scalarBase)) {
+                score += 100;
+            }
+            if (sourceName.contains("partkey") || sourceBase.contains("partkey")) {
+                score += 80;
+            }
+            if (sourceName.endsWith("_key") || sourceBase.endsWith("_key")) {
+                score += 20;
+            }
+            if (sourceName.contains("suppkey") || sourceName.contains("nationkey") || sourceName.contains("regionkey")) {
+                score -= 25;
+            }
+            if (score > bestScore) {
+                bestScore = score;
+                best = sourceOutput;
+            }
+        }
+        return bestScore > 0 ? best : null;
     }
 
     private Map<String, VariableReferenceExpression> buildScalarVariableLookup()
@@ -689,6 +766,9 @@ public class OpengaussPlanAdapter
         PlanNode right = translateNode(rightJson, context, scalarBindings);
         String joinCondition = firstNonNull(text(node, "Hash Cond"), text(node, "Merge Cond"), text(node, "Join Filter"));
         List<EquiJoinClause> criteria = parseJoinCriteria(joinCondition, left, right);
+        if (criteria.isEmpty()) {
+            criteria = inferImplicitCorrelationJoinCriteria(left, right);
+        }
         right = ensureJoinBuildSideExchange(right, criteria, context);
         criteria = canonicalizeJoinCriteriaForSources(criteria, left, right);
         List<VariableReferenceExpression> outputVariables = new ArrayList<>(left.getOutputVariables());
@@ -712,6 +792,55 @@ public class OpengaussPlanAdapter
             }
         }
         return join;
+    }
+
+    private List<EquiJoinClause> inferImplicitCorrelationJoinCriteria(PlanNode left, PlanNode right)
+    {
+        if (left == null || right == null) {
+            return Collections.emptyList();
+        }
+        VariableReferenceExpression leftPartKey = findOutputByNameFragment(left.getOutputVariables(), "partkey");
+        VariableReferenceExpression rightColumn = findOutputByExactOrFragment(right.getOutputVariables(), "_column_", "_column", "partkey");
+        if (leftPartKey != null && rightColumn != null && leftPartKey.getType().equals(rightColumn.getType())) {
+            return List.of(new EquiJoinClause(leftPartKey, rightColumn));
+        }
+        VariableReferenceExpression rightPartKey = findOutputByNameFragment(right.getOutputVariables(), "partkey");
+        VariableReferenceExpression leftColumn = findOutputByExactOrFragment(left.getOutputVariables(), "_column_", "_column", "partkey");
+        if (rightPartKey != null && leftColumn != null && rightPartKey.getType().equals(leftColumn.getType())) {
+            return List.of(new EquiJoinClause(leftColumn, rightPartKey));
+        }
+        return Collections.emptyList();
+    }
+
+    private VariableReferenceExpression findOutputByNameFragment(List<VariableReferenceExpression> outputs, String fragment)
+    {
+        if (outputs == null || fragment == null) {
+            return null;
+        }
+        String normalizedFragment = fragment.toLowerCase(Locale.ENGLISH);
+        for (VariableReferenceExpression output : outputs) {
+            if (output != null && output.getName() != null && output.getName().toLowerCase(Locale.ENGLISH).contains(normalizedFragment)) {
+                return output;
+            }
+        }
+        return null;
+    }
+
+    private VariableReferenceExpression findOutputByExactOrFragment(List<VariableReferenceExpression> outputs, String exactName, String alternateExactName, String fallbackFragment)
+    {
+        if (outputs == null) {
+            return null;
+        }
+        for (VariableReferenceExpression output : outputs) {
+            if (output == null || output.getName() == null) {
+                continue;
+            }
+            String name = output.getName().toLowerCase(Locale.ENGLISH);
+            if (name.equals(exactName) || name.equals(alternateExactName)) {
+                return output;
+            }
+        }
+        return findOutputByNameFragment(outputs, fallbackFragment);
     }
 
     private List<VariableReferenceExpression> appendOutputs(List<VariableReferenceExpression> left, List<VariableReferenceExpression> right)
