@@ -4740,6 +4740,12 @@ public class OpengaussPlanAdapter
         String simple = simpleName(normalized).toLowerCase(Locale.ENGLISH);
         String simpleBase = stripVariableIdSuffix(simple);
         boolean qualified = normalized.contains(".");
+        if (qualified) {
+            VariableReferenceExpression qualifiedVariable = findQualifiedVariable(normalized, buildVariablesByOutput(node));
+            if (qualifiedVariable != null) {
+                return qualifiedVariable;
+            }
+        }
         String aliasQualified = qualified ? normalized.replace('.', '_') : normalized;
         String aliasQualifiedBase = stripVariableIdSuffix(aliasQualified);
         String compact = normalized.replaceAll("[^a-z0-9_]+", "");
