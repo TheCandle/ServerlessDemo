@@ -1923,28 +1923,31 @@ public class OpengaussPlanAdapter
             }
         }
 
-        columnNames = filterUserVisibleOutputNames(columnNames);
-        columnNames = selectLeadingQualifiedOutputs(columnNames);
+        List<String> rawColumnNames = new ArrayList<>(columnNames);
+        boolean explicitSelectList = hasLeadingQualifiedSelectList(rawColumnNames);
+        List<String> visibleColumnNames = filterUserVisibleOutputNames(rawColumnNames);
+        List<String> displayColumnNames = selectLeadingQualifiedOutputs(visibleColumnNames);
         int outputSize = outputVariables.size();
-        int columnSize = columnNames.size();
-        int pairSize = Math.min(columnSize, outputSize);
-        if (columnSize != outputSize) {
+        int displaySize = displayColumnNames.size();
+        if (displaySize != outputSize) {
             System.out.println("[OpengaussPlanAdapter] output mismatch nodeType=" + text(node, "Node Type")
                     + " nodeOutput=" + text(node, "Output")
-                    + " parsedNames=" + columnNames
+                    + " parsedNames=" + displayColumnNames
+                    + " rawNames=" + rawColumnNames
                     + " planOutputs=" + outputVariables
-                    + " action=" + (columnSize < outputSize ? "padding column names from plan outputs" : "expanding plan outputs to match declared columns"));
+                    + " action=" + (displaySize < outputSize ? "padding from plan outputs" : "expanding plan outputs to match declared columns"));
         }
 
-        List<VariableReferenceExpression> finalOutputs = new ArrayList<>();
+        List<String> mappedColumnNames = new ArrayList<>();
         Map<VariableReferenceExpression, RowExpression> assignments = new LinkedHashMap<>();
         Map<String, VariableReferenceExpression> outputLookup = buildVariablesByPlanTree(planNode);
         for (VariableReferenceExpression variable : outputVariables) {
             outputLookup.put(variable.getName().toLowerCase(Locale.ENGLISH), variable);
             outputLookup.put(simpleName(variable.getName()).toLowerCase(Locale.ENGLISH), variable);
         }
+        int pairSize = Math.min(displaySize, outputSize);
         for (int i = 0; i < pairSize; i++) {
-            String columnName = columnNames.get(i);
+            String columnName = displayColumnNames.get(i);
             RowExpression sourceExpression = resolveDeclaredOutputExpression(columnName, outputLookup);
             if (!(sourceExpression instanceof VariableReferenceExpression)) {
                 sourceExpression = outputVariables.get(i);
@@ -1957,31 +1960,37 @@ public class OpengaussPlanAdapter
             }
             VariableReferenceExpression source = (VariableReferenceExpression) sourceExpression;
             VariableReferenceExpression alias = context.getVariableAllocator().newVariable(columnName, source.getType());
-            finalOutputs.add(alias);
+            mappedColumnNames.add(columnName);
             assignments.put(alias, source);
         }
 
-        boolean declaredSelectList = columnNames.stream().anyMatch(name -> name != null && name.toLowerCase(Locale.ENGLISH).startsWith("public."));
-        if (!declaredSelectList && outputSize > pairSize) {
-            for (int i = pairSize; i < outputSize; i++) {
+        if (!explicitSelectList && displaySize < outputSize) {
+            for (int i = displaySize; i < outputSize; i++) {
                 VariableReferenceExpression source = outputVariables.get(i);
-                VariableReferenceExpression alias = context.getVariableAllocator().newVariable(source.getName(), source.getType());
-                finalOutputs.add(alias);
+                if (source == null) {
+                    continue;
+                }
+                String fallbackName = source.getName();
+                VariableReferenceExpression alias = context.getVariableAllocator().newVariable(fallbackName, source.getType());
+                mappedColumnNames.add(fallbackName);
                 assignments.put(alias, source);
-                columnNames.add(source.getName());
             }
         }
-        else if (columnSize > pairSize) {
+        else if (displaySize > pairSize) {
             VariableReferenceExpression source = outputVariables.isEmpty() ? null : outputVariables.get(outputSize - 1);
-            for (int i = pairSize; i < columnSize; i++) {
+            for (int i = pairSize; i < displaySize; i++) {
                 if (source == null) {
                     break;
                 }
-                VariableReferenceExpression alias = context.getVariableAllocator().newVariable(columnNames.get(i), source.getType());
-                finalOutputs.add(alias);
+                String columnName = displayColumnNames.get(i);
+                VariableReferenceExpression alias = context.getVariableAllocator().newVariable(columnName, source.getType());
+                mappedColumnNames.add(columnName);
                 assignments.put(alias, source);
             }
         }
+
+        columnNames = mappedColumnNames;
+        List<VariableReferenceExpression> finalOutputs = new ArrayList<>(assignments.keySet());
 
         System.out.println("[OpengaussPlanAdapter] wrap OutputNode nodeType=" + text(node, "Node Type")
                 + " finalColumns=" + columnNames
@@ -2014,7 +2023,7 @@ public class OpengaussPlanAdapter
             }
             String normalized = columnName.toLowerCase(Locale.ENGLISH).trim();
             String simple = simpleName(normalized).toLowerCase(Locale.ENGLISH);
-            if (leadingQualifiedSelectList && !normalized.startsWith("public.")) {
+            if (leadingQualifiedSelectList && !normalized.startsWith("public.") && !isUserVisibleComputedOutputName(normalized, simple)) {
                 break;
             }
             if (normalized.contains("pg_catalog_avg_avg_") || normalized.contains("pg_catalog_sum_count_") || simple.matches(".*_(raw|arg)$")) {
@@ -2023,6 +2032,24 @@ public class OpengaussPlanAdapter
             filtered.add(columnName);
         }
         return filtered;
+    }
+
+    private boolean hasLeadingQualifiedSelectList(List<String> columnNames)
+    {
+        if (columnNames == null || columnNames.isEmpty()) {
+            return false;
+        }
+        for (String columnName : columnNames) {
+            if (columnName == null || columnName.isBlank()) {
+                continue;
+            }
+            String normalized = columnName.trim().toLowerCase(Locale.ENGLISH);
+            if (normalized.startsWith("public.") || normalized.contains(".")) {
+                return true;
+            }
+            break;
+        }
+        return false;
     }
 
     private List<String> selectLeadingQualifiedOutputs(List<String> columnNames)
@@ -2037,8 +2064,13 @@ public class OpengaussPlanAdapter
                 continue;
             }
             String normalized = columnName.trim().toLowerCase(Locale.ENGLISH);
+            String simple = simpleName(normalized).toLowerCase(Locale.ENGLISH);
             if (normalized.startsWith("public.")) {
                 sawQualified = true;
+                selected.add(columnName);
+                continue;
+            }
+            if (sawQualified && isUserVisibleComputedOutputName(normalized, simple)) {
                 selected.add(columnName);
                 continue;
             }
@@ -2047,6 +2079,17 @@ public class OpengaussPlanAdapter
             }
         }
         return selected.isEmpty() ? columnNames : selected;
+    }
+
+    private boolean isUserVisibleComputedOutputName(String normalized, String simple)
+    {
+        if (normalized == null) {
+            return false;
+        }
+        return simple != null && !simple.isBlank() && !simple.matches(".*_(raw|arg)$")
+                && !normalized.contains("pg_catalog_avg_avg_")
+                && !normalized.contains("pg_catalog_sum_count_")
+                && (simple.contains("sum_") || simple.contains("avg_") || simple.contains("count_") || simple.contains("min_") || simple.contains("max_") || simple.contains("date_part") || simple.contains("extract") || simple.contains("_column") || simple.matches("[a-z0-9_]+"));
     }
 
     private boolean shouldUseOrdinalOutputForDeclaredColumn(String columnName, VariableReferenceExpression candidateSource, List<VariableReferenceExpression> outputVariables, int ordinal)
