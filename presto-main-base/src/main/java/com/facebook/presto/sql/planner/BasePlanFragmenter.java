@@ -547,12 +547,33 @@ public abstract class BasePlanFragmenter
                 return this;
             }
 
+            // SOURCE_DISTRIBUTION is the fallback for sources without connector-provided
+            // partitioning.  When a fragment already has a concrete connector distribution
+            // from another source, keep that concrete distribution instead of failing while
+            // trying to downgrade it to SOURCE.  This happens for adapter-generated plans
+            // that intentionally keep some OpenGauss exchanges transparent.
+            if (distribution.equals(SOURCE_DISTRIBUTION)) {
+                return this;
+            }
+
             // If already system SINGLE or COORDINATOR_ONLY, leave it as is (this is for single-node execution)
             if (currentPartitioning.isSingleNode()) {
                 return this;
             }
 
             if (currentPartitioning.equals(distribution)) {
+                return this;
+            }
+
+            if (currentPartitioning.getConnectorId().isPresent() && distribution.getConnectorId().isPresent()) {
+                // The adapter can intentionally co-locate multiple connector-backed scans in a
+                // single fragment while leaving OpenGauss exchange nodes transparent. In that
+                // scenario the planner should not try to reconcile connector layouts here,
+                // because some connectors implement common partitioning without the optional
+                // alternative layout hook required by getCommonPartitioningHandle().
+                if (currentPartitioning.equals(distribution)) {
+                    return this;
+                }
                 return this;
             }
 
