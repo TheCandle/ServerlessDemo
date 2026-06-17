@@ -39,7 +39,7 @@ temp:
 		--server 127.0.0.1:8082 \
 		--catalog tpchstandard \
 		--schema $(SCALE_FACTOR) \
-		--output-format CSV \
+		--output-format CSV_HEADER \
 		-f tmp.sql > tmp.csv
 
 test-q%:

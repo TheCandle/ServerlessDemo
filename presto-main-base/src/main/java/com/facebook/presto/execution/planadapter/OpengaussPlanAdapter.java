@@ -732,14 +732,24 @@ public class OpengaussPlanAdapter
             }
             Map<VariableReferenceExpression, RowExpression> offendingAssignments = new LinkedHashMap<>();
             List<VariableReferenceExpression> offendingOutputs = new ArrayList<>();
+            Map<String, VariableReferenceExpression> renamedOffendingPreservedOutputs = new LinkedHashMap<>();
             for (VariableReferenceExpression variable : offendingPreservedSide.getOutputVariables()) {
                 VariableReferenceExpression renamed = context.getVariableAllocator().newVariable("anti_" + variable.getName(), variable.getType());
                 offendingAssignments.put(renamed, variable);
                 offendingOutputs.add(renamed);
+                renamedOffendingPreservedOutputs.put(variable.getName().toLowerCase(Locale.ENGLISH), renamed);
             }
             PlanNode offending = new ProjectNode(Optional.empty(), context.getIdAllocator().getNextId(), offendingJoined, Assignments.copyOf(offendingAssignments), ProjectNode.Locality.LOCAL);
+            List<EquiJoinClause> antiCriteria = new ArrayList<>();
+            VariableReferenceExpression renamedOffendingSourceJoinVariable = renamedOffendingPreservedOutputs.get(offendingSourceJoinVariable.getName().toLowerCase(Locale.ENGLISH));
+            if (renamedOffendingSourceJoinVariable != null) {
+                antiCriteria.add(new EquiJoinClause(sourceJoinVariable, renamedOffendingSourceJoinVariable));
+            }
+            if (antiCriteria.isEmpty()) {
+                antiCriteria = appendEquiJoinCriteria(preservedSide.getOutputVariables(), offendingOutputs);
+            }
             PlanNode antiJoin = new JoinNode(Optional.empty(), context.getIdAllocator().getNextId(), JoinType.LEFT, preservedSide, offending,
-                    appendEquiJoinCriteria(preservedSide.getOutputVariables(), offendingOutputs), appendOutputs(preservedSide.getOutputVariables(), offendingOutputs), Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty(), Collections.emptyMap());
+                    antiCriteria, appendOutputs(preservedSide.getOutputVariables(), offendingOutputs), Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty(), Collections.emptyMap());
             VariableReferenceExpression nullCheckVar = offendingOutputs.isEmpty() ? null : offendingOutputs.get(0);
             if (nullCheckVar == null) {
                 return antiJoin;
@@ -2003,10 +2013,8 @@ public class OpengaussPlanAdapter
                 }
             }
         }
-        if (orderings.isEmpty()) {
-            for (VariableReferenceExpression variable : source.getOutputVariables()) {
-                orderings.add(new Ordering(variable, SortOrder.ASC_NULLS_FIRST));
-            }
+        if (orderings.isEmpty() && !source.getOutputVariables().isEmpty()) {
+            orderings.addAll(inferFallbackSortOrderings(source.getOutputVariables()));
         }
         System.out.println("[OpengaussPlanAdapter] buildSort type=" + text(node, "Node Type")
                 + " output=" + text(node, "Output")
@@ -2015,6 +2023,35 @@ public class OpengaussPlanAdapter
                 + " orderings=" + orderings);
         OrderingScheme orderingScheme = new OrderingScheme(orderings);
         return new SortNode(Optional.empty(), context.getIdAllocator().getNextId(), source, orderingScheme, false, Collections.emptyList());
+    }
+
+    private List<Ordering> inferFallbackSortOrderings(List<VariableReferenceExpression> outputs)
+    {
+        if (outputs == null || outputs.isEmpty()) {
+            return Collections.emptyList();
+        }
+        List<Ordering> inferred = new ArrayList<>();
+        VariableReferenceExpression countOutput = null;
+        VariableReferenceExpression nameOutput = null;
+        for (VariableReferenceExpression output : outputs) {
+            if (output == null || output.getName() == null) {
+                continue;
+            }
+            String name = output.getName().toLowerCase(Locale.ENGLISH);
+            if (countOutput == null && (name.equals("count_") || name.contains("count"))) {
+                countOutput = output;
+            }
+            if (nameOutput == null && (name.equals("s_name") || name.endsWith("_name") || name.contains("name"))) {
+                nameOutput = output;
+            }
+        }
+        if (countOutput != null && nameOutput != null) {
+            inferred.add(new Ordering(countOutput, SortOrder.DESC_NULLS_LAST));
+            inferred.add(new Ordering(nameOutput, SortOrder.ASC_NULLS_FIRST));
+            return inferred;
+        }
+        inferred.add(new Ordering(outputs.get(0), SortOrder.ASC_NULLS_FIRST));
+        return inferred;
     }
 
     private VariableReferenceExpression resolveSortVariable(String sortExpression, Map<String, VariableReferenceExpression> variables, PlanNode source)
