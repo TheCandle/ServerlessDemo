@@ -651,6 +651,8 @@ public class OpengaussPlanAdapter
             }
 
             if (joinFilterText == null || joinFilterText.isBlank()) {
+                filteringSide = ensureReplicatedExchange(filteringSide, context);
+                filteringJoinVariable = canonicalizePartitionColumnForSource(filteringJoinVariable, filteringSide);
                 VariableReferenceExpression semiOutput = context.getVariableAllocator().newVariable("semi_join", BooleanType.BOOLEAN);
                 SemiJoinNode semiJoin = new SemiJoinNode(
                         Optional.empty(),
@@ -662,7 +664,7 @@ public class OpengaussPlanAdapter
                         semiOutput,
                         Optional.empty(),
                         Optional.empty(),
-                        Optional.of(normalizedJoinType.contains("replic") ? SemiJoinNode.DistributionType.REPLICATED : SemiJoinNode.DistributionType.PARTITIONED),
+                        Optional.of(SemiJoinNode.DistributionType.REPLICATED),
                         Collections.emptyMap());
                 if (normalizedJoinType.contains("anti")) {
                     RowExpression antiPredicate = new CallExpression("not", builtInUnaryHandle("not", BooleanType.BOOLEAN, semiOutput.getType()), BooleanType.BOOLEAN, List.of(semiOutput));
@@ -672,6 +674,8 @@ public class OpengaussPlanAdapter
                 return new FilterNode(Optional.empty(), context.getIdAllocator().getNextId(), semiJoin, semiPredicate);
             }
 
+            filteringSide = ensureReplicatedExchange(filteringSide, context);
+            filteringJoinVariable = canonicalizePartitionColumnForSource(filteringJoinVariable, filteringSide);
             List<EquiJoinClause> semiCriteria = List.of(new EquiJoinClause(sourceJoinVariable, filteringJoinVariable));
             PlanNode joined = new JoinNode(Optional.empty(), context.getIdAllocator().getNextId(), JoinType.INNER, preservedSide, filteringSide, semiCriteria,
                     appendOutputs(preservedSide.getOutputVariables(), filteringSide.getOutputVariables()), Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty(), Collections.emptyMap());
@@ -1813,6 +1817,14 @@ public class OpengaussPlanAdapter
             mergedPreProjectAssignments.putAll(preProjectAssignments);
             current = new ProjectNode(Optional.empty(), context.getIdAllocator().getNextId(), current, Assignments.copyOf(mergedPreProjectAssignments), ProjectNode.Locality.LOCAL);
         }
+        if (!aggSpecs.isEmpty() && !isSingleDriverAggregationInput(current)) {
+            System.out.println("[OpengaussPlanAdapter] forcing single-driver aggregation input nodeType=" + text(node, "Node Type")
+                    + " groupingKeys=" + groupingKeys
+                    + " aggSpecs=" + aggSpecs.size()
+                    + " sourceOutputs=" + current.getOutputVariables());
+            current = ExchangeNode.gatheringExchange(context.getIdAllocator().getNextId(), ExchangeNode.Scope.REMOTE_STREAMING, current);
+            current = ExchangeNode.gatheringExchange(context.getIdAllocator().getNextId(), ExchangeNode.Scope.LOCAL, current);
+        }
         String havingFilter = text(node, "Filter");
         boolean groupOnlyAggregate = !declaredAggregateOutput;
         if (groupOnlyAggregate && havingFilter != null && !havingFilter.isBlank()) {
@@ -1912,6 +1924,18 @@ public class OpengaussPlanAdapter
         return new ProjectNode(Optional.empty(), context.getIdAllocator().getNextId(), aggregationSource, Assignments.copyOf(castAwareAssignments), ProjectNode.Locality.LOCAL);
     }
 
+    private boolean isSingleDriverAggregationInput(PlanNode source)
+    {
+        if (source == null) {
+            return false;
+        }
+        if (!(source instanceof ExchangeNode)) {
+            return false;
+        }
+        ExchangeNode exchangeNode = (ExchangeNode) source;
+        return exchangeNode.getType() == ExchangeNode.Type.GATHER && exchangeNode.getScope().isRemote();
+    }
+
     private boolean containsComputedExpression(String expression)
     {
         if (expression == null) {
@@ -2009,12 +2033,14 @@ public class OpengaussPlanAdapter
                 VariableReferenceExpression variable = resolveSortVariable(sortExpression, variables, source);
                 if (variable != null) {
                     SortOrder sortOrder = parseSortOrder(token);
-                    orderings.add(new Ordering(variable, sortOrder));
+                    addDistinctOrdering(orderings, variable, sortOrder);
                 }
             }
         }
         if (orderings.isEmpty() && !source.getOutputVariables().isEmpty()) {
-            orderings.addAll(inferFallbackSortOrderings(source.getOutputVariables()));
+            for (Ordering ordering : inferFallbackSortOrderings(source.getOutputVariables())) {
+                addDistinctOrdering(orderings, ordering.getVariable(), ordering.getSortOrder());
+            }
         }
         System.out.println("[OpengaussPlanAdapter] buildSort type=" + text(node, "Node Type")
                 + " output=" + text(node, "Output")
@@ -2023,6 +2049,19 @@ public class OpengaussPlanAdapter
                 + " orderings=" + orderings);
         OrderingScheme orderingScheme = new OrderingScheme(orderings);
         return new SortNode(Optional.empty(), context.getIdAllocator().getNextId(), source, orderingScheme, false, Collections.emptyList());
+    }
+
+    private void addDistinctOrdering(List<Ordering> orderings, VariableReferenceExpression variable, SortOrder sortOrder)
+    {
+        if (orderings == null || variable == null || sortOrder == null) {
+            return;
+        }
+        for (Ordering existing : orderings) {
+            if (existing != null && existing.getVariable().equals(variable)) {
+                return;
+            }
+        }
+        orderings.add(new Ordering(variable, sortOrder));
     }
 
     private List<Ordering> inferFallbackSortOrderings(List<VariableReferenceExpression> outputs)
@@ -2118,14 +2157,15 @@ public class OpengaussPlanAdapter
         String sortKey = text(node, "Sort Key");
         if (sortKey != null) {
             for (String token : splitCommaSeparated(sortKey)) {
-                VariableReferenceExpression variable = lookupVariable(token, variables);
+                String sortExpression = stripSortDirection(token);
+                VariableReferenceExpression variable = resolveSortVariable(sortExpression, variables, source);
                 if (variable != null) {
-                    orderings.add(new Ordering(variable, SortOrder.ASC_NULLS_FIRST));
+                    addDistinctOrdering(orderings, variable, parseSortOrder(token));
                 }
             }
         }
         if (orderings.isEmpty() && !source.getOutputVariables().isEmpty()) {
-            orderings.add(new Ordering(source.getOutputVariables().get(0), SortOrder.ASC_NULLS_FIRST));
+            addDistinctOrdering(orderings, source.getOutputVariables().get(0), SortOrder.ASC_NULLS_FIRST);
         }
         return new TopNNode(Optional.empty(), context.getIdAllocator().getNextId(), Optional.empty(), source, count, new OrderingScheme(orderings), TopNNode.Step.SINGLE);
     }
