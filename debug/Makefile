@@ -56,12 +56,21 @@ test-q%:
 		--catalog tpchstandard \
 		--schema $(SCALE_FACTOR) \
 		--output-format CSV \
-		--session max_drivers_per_task=1 \
 		--execute "select $*" > output/my-q$*.csv
 
 	sort output/q$*.csv > output/q$*.sorted
 	sort output/my-q$*.csv > output/my-q$*.sorted
 	diff output/q$*.sorted output/my-q$*.sorted
+
+run-q%:
+	mkdir -p run
+
+	java -jar ../presto-cli/target/presto-cli-*-executable.jar \
+		--server 127.0.0.1:8082 \
+		--catalog tpchstandard \
+		--schema $(SCALE_FACTOR) \
+		--output-format CSV \
+		--execute "select $*" > run/my-q$*.csv
 
 $(QUERIES):
 	$(MAKE) test-q$(@:q%=%)

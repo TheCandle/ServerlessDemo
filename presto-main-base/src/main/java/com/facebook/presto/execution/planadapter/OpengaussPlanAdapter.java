@@ -2025,16 +2025,18 @@ public class OpengaussPlanAdapter
         }
         PlanNode source = translateNode(child, context, scalarBindings);
         List<Ordering> orderings = new ArrayList<>();
+        List<String> sortKeyTokens = textList(node, "Sort Key");
         String sortKey = text(node, "Sort Key");
+        if (sortKeyTokens.isEmpty() && sortKey != null && !sortKey.isBlank()) {
+            sortKeyTokens = splitCommaSeparated(sortKey);
+        }
         Map<String, VariableReferenceExpression> variables = buildVariablesByOutput(source);
-        if (sortKey != null) {
-            for (String token : splitCommaSeparated(sortKey)) {
-                String sortExpression = stripSortDirection(token);
-                VariableReferenceExpression variable = resolveSortVariable(sortExpression, variables, source);
-                if (variable != null) {
-                    SortOrder sortOrder = parseSortOrder(token);
-                    addDistinctOrdering(orderings, variable, sortOrder);
-                }
+        for (String token : sortKeyTokens) {
+            String sortExpression = stripSortDirection(token);
+            VariableReferenceExpression variable = resolveSortVariable(sortExpression, variables, source);
+            if (variable != null) {
+                SortOrder sortOrder = parseSortOrder(token);
+                addDistinctOrdering(orderings, variable, sortOrder);
             }
         }
         if (orderings.isEmpty() && !source.getOutputVariables().isEmpty()) {
@@ -2154,14 +2156,16 @@ public class OpengaussPlanAdapter
         long count = parseLong(firstNonNull(text(node, "Rows"), text(node, "Plan Rows")), 10);
         List<Ordering> orderings = new ArrayList<>();
         Map<String, VariableReferenceExpression> variables = buildVariablesByOutput(source);
+        List<String> sortKeyTokens = textList(node, "Sort Key");
         String sortKey = text(node, "Sort Key");
-        if (sortKey != null) {
-            for (String token : splitCommaSeparated(sortKey)) {
-                String sortExpression = stripSortDirection(token);
-                VariableReferenceExpression variable = resolveSortVariable(sortExpression, variables, source);
-                if (variable != null) {
-                    addDistinctOrdering(orderings, variable, parseSortOrder(token));
-                }
+        if (sortKeyTokens.isEmpty() && sortKey != null && !sortKey.isBlank()) {
+            sortKeyTokens = splitCommaSeparated(sortKey);
+        }
+        for (String token : sortKeyTokens) {
+            String sortExpression = stripSortDirection(token);
+            VariableReferenceExpression variable = resolveSortVariable(sortExpression, variables, source);
+            if (variable != null) {
+                addDistinctOrdering(orderings, variable, parseSortOrder(token));
             }
         }
         if (orderings.isEmpty() && !source.getOutputVariables().isEmpty()) {
@@ -5266,8 +5270,24 @@ public class OpengaussPlanAdapter
 
     private String text(JsonNode node, String field)
     {
+        if (node == null) {
+            return null;
+        }
         JsonNode value = node.get(field);
-        return value == null || value.isNull() ? null : value.asText();
+        if (value == null || value.isNull()) {
+            return null;
+        }
+        if (value.isArray()) {
+            List<String> values = new ArrayList<>();
+            for (JsonNode element : value) {
+                String elementText = element.asText();
+                if (elementText != null && !elementText.isBlank()) {
+                    values.add(elementText);
+                }
+            }
+            return values.isEmpty() ? null : String.join(", ", values);
+        }
+        return value.asText();
     }
 
     private Optional<QualifiedObjectName> resolveQualifiedTableName(Metadata metadata, Session session, String tableName, String schemaName)
