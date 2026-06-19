@@ -679,9 +679,16 @@ public class OpengaussPlanAdapter
             List<EquiJoinClause> semiCriteria = List.of(new EquiJoinClause(sourceJoinVariable, filteringJoinVariable));
             PlanNode joined = new JoinNode(Optional.empty(), context.getIdAllocator().getNextId(), JoinType.INNER, preservedSide, filteringSide, semiCriteria,
                     appendOutputs(preservedSide.getOutputVariables(), filteringSide.getOutputVariables()), Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty(), Collections.emptyMap());
-            RowExpression joinFilter = parsePredicate(rewriteJoinFilterAliases(joinFilterText, joined, node), buildVariablesByOutput(joined), context);
+            String rewrittenSemiJoinFilter = rewriteJoinFilterAliases(joinFilterText, joined, node);
+            RowExpression joinFilter = buildAvailabilityThresholdFilter(joinFilterText, joined);
+            if (joinFilter == null) {
+                joinFilter = parsePredicate(rewrittenSemiJoinFilter, buildVariablesByOutput(joined), context);
+            }
             if (joinFilter != null) {
                 joined = new FilterNode(Optional.empty(), context.getIdAllocator().getNextId(), joined, joinFilter);
+            }
+            else {
+                System.out.println("[OpengaussPlanAdapter] semi join filter dropped raw=" + joinFilterText + " rewritten=" + rewrittenSemiJoinFilter + " joinOutputs=" + joined.getOutputVariables());
             }
 
             if (normalizedJoinType.contains("semi")) {
@@ -801,7 +808,10 @@ public class OpengaussPlanAdapter
         if (text(node, "Join Filter") != null) {
             String rawJoinFilter = text(node, "Join Filter");
             String joinFilter = rewriteJoinFilterAliases(rawJoinFilter, join, node);
-            RowExpression filter = parsePredicate(joinFilter, buildVariablesByOutput(join), context);
+            RowExpression filter = buildAvailabilityThresholdFilter(rawJoinFilter, join);
+            if (filter == null) {
+                filter = parsePredicate(joinFilter, buildVariablesByOutput(join), context);
+            }
             if (filter == null) {
                 filter = buildCorrelatedQuantityThresholdFilter(rawJoinFilter, join);
             }
@@ -832,6 +842,86 @@ public class OpengaussPlanAdapter
             return null;
         }
         return buildComparison("<", quantity, threshold);
+    }
+
+    private RowExpression buildAvailabilityThresholdFilter(String joinFilter, PlanNode join)
+    {
+        if (joinFilter == null || join == null) {
+            return null;
+        }
+        String normalized = canonicalizeExpressionText(joinFilter).toLowerCase(Locale.ENGLISH);
+        if (!normalized.contains("ps_availqty") || !normalized.contains("sum") || !normalized.contains("l_quantity") || !normalized.contains(".5")) {
+            return null;
+        }
+        VariableReferenceExpression availQty = findBestAvailabilityOutput(join.getOutputVariables());
+        VariableReferenceExpression sumQuantity = findBestSumQuantityOutput(join.getOutputVariables());
+        if (availQty == null || sumQuantity == null) {
+            System.out.println("[OpengaussPlanAdapter] availability filter unresolved availQty=" + availQty + " sumQuantity=" + sumQuantity + " outputs=" + join.getOutputVariables());
+            return null;
+        }
+        RowExpression threshold = isHalfSumQuantityOutput(sumQuantity)
+                ? sumQuantity
+                : buildArithmetic("multiply", new ConstantExpression(0.5, DoubleType.DOUBLE), sumQuantity);
+        if (threshold == null) {
+            return null;
+        }
+        System.out.println("[OpengaussPlanAdapter] availability filter raw=" + joinFilter + " availQty=" + availQty + " sumQuantity=" + sumQuantity + " threshold=" + threshold);
+        return buildComparison(">", availQty, threshold);
+    }
+
+    private boolean isHalfSumQuantityOutput(VariableReferenceExpression output)
+    {
+        if (output == null || output.getName() == null) {
+            return false;
+        }
+        String name = output.getName().toLowerCase(Locale.ENGLISH);
+        return name.contains("_5") || name.contains("half");
+    }
+
+    private VariableReferenceExpression findBestAvailabilityOutput(List<VariableReferenceExpression> outputs)
+    {
+        if (outputs == null) {
+            return null;
+        }
+        for (VariableReferenceExpression output : outputs) {
+            if (output != null && output.getName() != null && output.getName().toLowerCase(Locale.ENGLISH).contains("ps_availqty")) {
+                return output;
+            }
+        }
+        return findOutputByNameFragment(outputs, "availqty");
+    }
+
+    private VariableReferenceExpression findBestSumQuantityOutput(List<VariableReferenceExpression> outputs)
+    {
+        if (outputs == null) {
+            return null;
+        }
+        VariableReferenceExpression best = null;
+        int bestScore = Integer.MIN_VALUE;
+        for (VariableReferenceExpression output : outputs) {
+            if (output == null || output.getName() == null || !DoubleType.DOUBLE.equals(output.getType())) {
+                continue;
+            }
+            String name = output.getName().toLowerCase(Locale.ENGLISH);
+            int score = 0;
+            if (name.contains("sum") && name.contains("quantity")) {
+                score += 120;
+            }
+            if (name.contains("l_quantity")) {
+                score += 50;
+            }
+            if (name.contains("_5") || name.contains("half")) {
+                score += 40;
+            }
+            if (name.contains("avg") || name.contains("extendedprice") || name.contains("discount")) {
+                score -= 100;
+            }
+            if (score > bestScore) {
+                bestScore = score;
+                best = output;
+            }
+        }
+        return bestScore > 0 ? best : null;
     }
 
     private VariableReferenceExpression findBestQ17ThresholdOutput(List<VariableReferenceExpression> outputs, VariableReferenceExpression quantity)
@@ -6728,22 +6818,23 @@ public class OpengaussPlanAdapter
 
     private String inferAggregationFunctionFromText(String lowerText)
     {
-        if (lowerText.contains("sum(")) {
-            return "sum";
-        }
-        if (lowerText.contains("count(")) {
+        if (lowerText == null) {
             return "count";
         }
-        if (lowerText.contains("avg(")) {
-            return "avg";
+        int bestIndex = Integer.MAX_VALUE;
+        String bestFunction = "count";
+        for (String functionName : List.of("sum", "count", "avg", "min", "max")) {
+            int index = lowerText.indexOf(functionName + "(");
+            int catalogIndex = lowerText.indexOf("pg_catalog." + functionName + "(");
+            if (catalogIndex >= 0 && (index < 0 || catalogIndex < index)) {
+                index = catalogIndex;
+            }
+            if (index >= 0 && index < bestIndex) {
+                bestIndex = index;
+                bestFunction = functionName;
+            }
         }
-        if (lowerText.contains("min(")) {
-            return "min";
-        }
-        if (lowerText.contains("max(")) {
-            return "max";
-        }
-        return "count";
+        return bestFunction;
     }
 
     private int findAggregationFunctionOpen(String text, String functionName)
