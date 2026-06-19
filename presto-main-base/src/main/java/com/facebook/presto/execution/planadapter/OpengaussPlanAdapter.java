@@ -1817,8 +1817,11 @@ public class OpengaussPlanAdapter
             mergedPreProjectAssignments.putAll(preProjectAssignments);
             current = new ProjectNode(Optional.empty(), context.getIdAllocator().getNextId(), current, Assignments.copyOf(mergedPreProjectAssignments), ProjectNode.Locality.LOCAL);
         }
-        if (!aggSpecs.isEmpty() && !isSingleDriverAggregationInput(current)) {
-            System.out.println("[OpengaussPlanAdapter] forcing single-driver aggregation input nodeType=" + text(node, "Node Type")
+        if (shouldGatherBeforeAggregation(node, child, aggSpecs, current)) {
+            System.out.println("[OpengaussPlanAdapter] gathering aggregation input by OpenGauss dop nodeType=" + text(node, "Node Type")
+                    + " nodeDop=" + intValue(node, "dop", -1)
+                    + " childType=" + text(child, "Node Type")
+                    + " childDop=" + intValue(child, "dop", -1)
                     + " groupingKeys=" + groupingKeys
                     + " aggSpecs=" + aggSpecs.size()
                     + " sourceOutputs=" + current.getOutputVariables());
@@ -1922,18 +1925,36 @@ public class OpengaussPlanAdapter
             castAwareAssignments.put(target, sourceExpression);
         }
         return new ProjectNode(Optional.empty(), context.getIdAllocator().getNextId(), aggregationSource, Assignments.copyOf(castAwareAssignments), ProjectNode.Locality.LOCAL);
+        // PlanNode projectedAggregation = new ProjectNode(Optional.empty(), context.getIdAllocator().getNextId(), aggregationSource, Assignments.copyOf(castAwareAssignments), ProjectNode.Locality.LOCAL);
+        // if (shouldDeduplicateSingleDopGroupedAggregation(node, groupingKeys, finalOutputs)) {
+        //     System.out.println("[OpengaussPlanAdapter] deduplicating dop=1 grouped aggregation output nodeType=" + text(node, "Node Type")
+        //             + " groupingKeys=" + groupingKeys
+        //             + " finalOutputs=" + projectedAggregation.getOutputVariables());
+        //     return new AggregationNode(Optional.empty(), context.getIdAllocator().getNextId(), projectedAggregation, Collections.emptyMap(), AggregationNode.singleGroupingSet(projectedAggregation.getOutputVariables()), Collections.emptyList(), AggregationNode.Step.SINGLE, Optional.empty(), Optional.empty(), Optional.empty());
+        // }
+        // return projectedAggregation;
     }
 
-    private boolean isSingleDriverAggregationInput(PlanNode source)
+    private boolean shouldDeduplicateSingleDopGroupedAggregation(JsonNode node, List<VariableReferenceExpression> groupingKeys, List<VariableReferenceExpression> finalOutputs)
     {
-        if (source == null) {
+        return node != null
+                && intValue(node, "dop", -1) == 1
+                && groupingKeys != null
+                && !groupingKeys.isEmpty()
+                && finalOutputs != null
+                && !finalOutputs.isEmpty();
+    }
+
+    private boolean shouldGatherBeforeAggregation(JsonNode node, JsonNode child, List<AggregationCallSpec> aggSpecs, PlanNode source)
+    {
+        if (node == null || aggSpecs == null || aggSpecs.isEmpty() || source == null) {
             return false;
         }
-        if (!(source instanceof ExchangeNode)) {
-            return false;
+        int nodeDop = intValue(node, "dop", -1);
+        if (nodeDop == 1) {
+            return true;
         }
-        ExchangeNode exchangeNode = (ExchangeNode) source;
-        return exchangeNode.getType() == ExchangeNode.Type.GATHER && exchangeNode.getScope().isRemote();
+        return false;
     }
 
     private boolean containsComputedExpression(String expression)
@@ -5290,15 +5311,46 @@ public class OpengaussPlanAdapter
         return value.asText();
     }
 
+    private int intValue(JsonNode node, String field, int defaultValue)
+    {
+        if (node == null || field == null) {
+            return defaultValue;
+        }
+        JsonNode value = node.get(field);
+        if (value == null || value.isNull()) {
+            return defaultValue;
+        }
+        try {
+            if (value.isInt() || value.isLong() || value.isShort() || value.isBigInteger()) {
+                return value.intValue();
+            }
+            if (value.isNumber()) {
+                return value.intValue();
+            }
+            String text = value.asText();
+            if (text == null || text.isBlank()) {
+                return defaultValue;
+            }
+            return Integer.parseInt(text.replaceAll("[^0-9-]", ""));
+        }
+        catch (RuntimeException ignored) {
+            return defaultValue;
+        }
+    }
+
     private Optional<QualifiedObjectName> resolveQualifiedTableName(Metadata metadata, Session session, String tableName, String schemaName)
     {
         List<String> candidateCatalogs = new ArrayList<>();
-        candidateCatalogs.add("tpchstandard");
+//        candidateCatalogs.add("tpchstandard");
         // candidateCatalogs.add("tpch");
         // candidateCatalogs.add("tpcds");
+         candidateCatalogs.add("hive");
+        candidateCatalogs.add("tpchstandard");
         candidateCatalogs.addAll(metadata.getCatalogNames(session).keySet());
 
         List<String> candidateSchemas = new ArrayList<>();
+//        candidateSchemas.add("sf1");
+        candidateSchemas.add("tpch_test");
         candidateSchemas.add("sf1");
         if (schemaName != null && !schemaName.isBlank() && !"public".equalsIgnoreCase(schemaName)) {
             candidateSchemas.add(schemaName);
