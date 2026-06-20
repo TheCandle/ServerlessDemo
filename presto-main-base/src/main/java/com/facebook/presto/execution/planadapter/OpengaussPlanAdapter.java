@@ -4024,7 +4024,32 @@ public class OpengaussPlanAdapter
                 return new ConstantExpression(false, BooleanType.BOOLEAN);
             }
         }
+        if (("=".equals(operator) || "!=".equals(operator) || "<>".equals(operator))
+                && isFloatingPointComparison(coercedLeft, coercedRight)) {
+            RowExpression tolerantComparison = buildFloatingPointEqualityComparison(coercedLeft, coercedRight, "=".equals(operator));
+            if (tolerantComparison != null) {
+                return tolerantComparison;
+            }
+        }
         return new CallExpression(type.name().toLowerCase(Locale.ENGLISH), builtInComparisonHandle(type, coercedLeft, coercedRight), BooleanType.BOOLEAN, List.of(coercedLeft, coercedRight));
+    }
+
+    private boolean isFloatingPointComparison(RowExpression left, RowExpression right)
+    {
+        return left != null && right != null
+                && (left.getType() instanceof DoubleType || left.getType() instanceof RealType || right.getType() instanceof DoubleType || right.getType() instanceof RealType);
+    }
+
+    private RowExpression buildFloatingPointEqualityComparison(RowExpression left, RowExpression right, boolean equality)
+    {
+        RowExpression difference = buildArithmetic("subtract", left, right);
+        if (difference == null) {
+            return null;
+        }
+        RowExpression absoluteDifference = new CallExpression("abs", builtInHandle("abs", DoubleType.DOUBLE, difference.getType()), DoubleType.DOUBLE, List.of(difference));
+        RowExpression epsilon = new ConstantExpression(1.0E-6, DoubleType.DOUBLE);
+        OperatorType comparisonType = equality ? OperatorType.LESS_THAN_OR_EQUAL : OperatorType.GREATER_THAN;
+        return new CallExpression(comparisonType.name().toLowerCase(Locale.ENGLISH), builtInComparisonHandle(comparisonType, absoluteDifference, epsilon), BooleanType.BOOLEAN, List.of(absoluteDifference, epsilon));
     }
 
     private boolean isNumericType(Type type)
