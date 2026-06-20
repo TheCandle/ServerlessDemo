@@ -2044,6 +2044,37 @@ public class OpengaussPlanAdapter
         if (nodeDop == 1) {
             return true;
         }
+        String childType = text(child, "Node Type");
+        String normalizedChildType = childType == null ? "" : childType.toLowerCase(Locale.ENGLISH);
+        if (normalizedChildType.contains("redistribute") && hasGroupedSumAggregation(node, aggSpecs)) {
+            return true;
+        }
+        return false;
+    }
+
+    private boolean hasGroupedSumAggregation(JsonNode node, List<AggregationCallSpec> aggSpecs)
+    {
+        if (node == null || aggSpecs == null || aggSpecs.isEmpty()) {
+            return false;
+        }
+        List<String> groupKeyTokens = textList(node, "Group Key");
+        if (groupKeyTokens.isEmpty()) {
+            groupKeyTokens = textList(node, "Group By Key");
+        }
+        if (groupKeyTokens.isEmpty()) {
+            String groupKeyText = firstNonNull(text(node, "Group Key"), text(node, "Group By Key"));
+            if (groupKeyText != null && !groupKeyText.isBlank()) {
+                groupKeyTokens = splitCommaSeparated(groupKeyText);
+            }
+        }
+        if (groupKeyTokens.isEmpty()) {
+            return false;
+        }
+        for (AggregationCallSpec spec : aggSpecs) {
+            if (spec != null && "sum".equalsIgnoreCase(spec.getFunctionName())) {
+                return true;
+            }
+        }
         return false;
     }
 
